@@ -184,6 +184,14 @@ def run_computation(parameters, storage=None):
         total_energy, state, bcs, cone_parameters=parameters.get("stability")
     )
 
+    linesearch = LineSearch(
+        total_energy,
+        state,
+        linesearch_parameters=parameters.get("stability").get("linesearch"),
+    )
+
+    iterator = StabilityStepper(loads)
+
     for i_t, t in enumerate(loads):
         tau.value = t
 
@@ -215,7 +223,26 @@ def run_computation(parameters, storage=None):
         stable = stability.solve(alpha_lb, eig0=z0, inertia=inertia)
 
         with dolfinx.common.Timer("~Postprocessing and Vis"):
-            pass
+            fracture_energy = comm.allreduce(
+                assemble_scalar(form(model.damage_energy_density(state) * dx)),
+                op=MPI.SUM,
+            )
+            elastic_energy = comm.allreduce(
+                assemble_scalar(form(model.elastic_energy_density(state) * dx)),
+                op=MPI.SUM,
+            )
+
+        history_data["elastic_energy"].append(elastic_energy)
+        history_data["fracture_energy"].append(fracture_energy)
+        history_data["total_energy"].append(elastic_energy + fracture_energy)
+        history_data["load"].append(t)
+        history_data["unique"].append(is_unique)
+        history_data["stable"].append(stable)
+        history_data["inertia"].append(inertia)
+        history_data["eigs_cone"].append(stability.solution["lambda_t"])
+        history_data["eigs_ball"].append(bifurcation.data["eigs"])
+        history_data["equilibrium_data"].append(hybrid.data)
+        history_data["cone_data"].append(stability.data)
 
     return history_data
 
@@ -257,6 +284,10 @@ if __name__ == "__main__":
 
     with dolfinx.common.Timer(f"~Computation Experiment") as timer:
         history_data = run_computation(parameters, _storage)
+
+    experimental_data = pd.DataFrame(history_data)
+    print(experimental_data)
+    __import__("pdb").set_trace()
 
     from irrevolutions.utils import table_timing_data
 
