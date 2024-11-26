@@ -1,0 +1,25 @@
+2024-11-26 14:36:47,336  [Rank 0, Size 1]  - root - [INFO] - The root process spawning an evolution computation (rank 0)
+2024-11-26 14:36:47,336  [Rank 0, Size 1]  - root - [INFO] - DOLFINx version: 0.9.0 based on GIT commit:  of https://github.com/FEniCS/dolfinx/
+2024-11-26 14:36:47,912  [Rank 0, Size 1]  - py.warnings - [WARNING] - /opt/anaconda3/envs/fenicsx-env/lib/python3.11/site-packages/pyvista/utilities/__init__.py:72: PyVistaDeprecationWarning: The `pyvista.utilities` module has been deprecated. `xvfb` is now imported as: `from pyvista.plotting.utilities import xvfb`.
+  warnings.warn(
+
+2024-11-26 14:37:00,668  [Rank 0, Size 1]  - root - [INFO] - The root process spawning an evolution computation (rank 0)
+2024-11-26 14:37:00,668  [Rank 0, Size 1]  - root - [INFO] - DOLFINx version: 0.9.0 based on GIT commit:  of https://github.com/FEniCS/dolfinx/
+2024-11-26 14:37:00,812  [Rank 0, Size 1]  - py.warnings - [WARNING] - /opt/anaconda3/envs/fenicsx-env/lib/python3.11/site-packages/pyvista/utilities/__init__.py:72: PyVistaDeprecationWarning: The `pyvista.utilities` module has been deprecated. `xvfb` is now imported as: `from pyvista.plotting.utilities import xvfb`.
+  warnings.warn(
+
+2024-11-26 14:37:26,331  [Rank 0, Size 1]  - root - [INFO] - The root process spawning an evolution computation (rank 0)
+2024-11-26 14:37:26,331  [Rank 0, Size 1]  - root - [INFO] - DOLFINx version: 0.9.0 based on GIT commit:  of https://github.com/FEniCS/dolfinx/
+2024-11-26 14:37:26,485  [Rank 0, Size 1]  - py.warnings - [WARNING] - /opt/anaconda3/envs/fenicsx-env/lib/python3.11/site-packages/pyvista/utilities/__init__.py:72: PyVistaDeprecationWarning: The `pyvista.utilities` module has been deprecated. `xvfb` is now imported as: `from pyvista.plotting.utilities import xvfb`.
+  warnings.warn(
+
+2024-11-26 14:42:30,121  [Rank 0, Size 1]  - root - [INFO] - The root process spawning an evolution computation (rank 0)
+2024-11-26 14:42:30,121  [Rank 0, Size 1]  - root - [INFO] - DOLFINx version: 0.9.0 based on GIT commit:  of https://github.com/FEniCS/dolfinx/
+2024-11-26 14:42:30,278  [Rank 0, Size 1]  - py.warnings - [WARNING] - /opt/anaconda3/envs/fenicsx-env/lib/python3.11/site-packages/pyvista/utilities/__init__.py:72: PyVistaDeprecationWarning: The `pyvista.utilities` module has been deprecated. `xvfb` is now imported as: `from pyvista.plotting.utilities import xvfb`.
+  warnings.warn(
+
+2024-11-26 14:42:41,966  [Rank 0, Size 1]  - root - [INFO] - The root process spawning an evolution computation (rank 0)
+2024-11-26 14:42:41,966  [Rank 0, Size 1]  - root - [INFO] - DOLFINx version: 0.9.0 based on GIT commit:  of https://github.com/FEniCS/dolfinx/
+2024-11-26 14:42:42,060  [Rank 0, Size 1]  - py.warnings - [WARNING] - /opt/anaconda3/envs/fenicsx-env/lib/python3.11/site-packages/pyvista/utilities/__init__.py:72: PyVistaDeprecationWarning: The `pyvista.utilities` module has been deprecated. `xvfb` is now imported as: `from pyvista.plotting.utilities import xvfb`.
+  warnings.warn(
+
