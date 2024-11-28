@@ -62,6 +62,8 @@ from irrevolutions.utils.viz import plot_mesh, plot_profile, plot_scalar, plot_v
 from irrevolutions.models import BrittleMembraneOverElasticFoundation as ThinFilm
 from irrevolutions.meshes.primitives import mesh_circle_gmshapi
 
+from irrevolutions.models import BanquiseVaryingThickness as VariableThickness
+
 from mpi4py import MPI
 from petsc4py import PETSc
 from pyvista.plotting.utilities import xvfb
@@ -76,10 +78,7 @@ from crunchy.core import (
     create_function_spaces_2d,
     initialise_functions,
 )
-
 # from irrevolutions.utils.viz import _plot_bif_spectrum_profiles
-from crunchy.core import generate_gaussian_field
-from scipy.interpolate import RegularGridInterpolator
 
 petsc4py.init(sys.argv)
 comm = MPI.COMM_WORLD
@@ -88,6 +87,16 @@ comm = MPI.COMM_WORLD
 model_rank = 0
 
 BINARY_DATA = True
+
+
+from crunchy.filters import (
+    radial_blur_zoom,
+    radial_blur_spin,
+    twirl_effect,
+    motion_blur,
+    twirl_effect_quadratic,
+)
+from crunchy.core import generate_gaussian_field
 
 
 def plot_spectrum(history_data):
@@ -196,6 +205,19 @@ def run_computation(parameters, storage=None):
     # zero_u = Function(V_u, name="BoundaryDatum")
     # zero_u.interpolate(lambda x: (np.zeros_like(x[0]), np.zeros_like(x[1])))
 
+    thickness = dolfinx.fem.Function(V_alpha)
+
+    # Get the bounds of the domain
+    x_coords = mesh.geometry.x[:, 0]  # Extract x[0] values
+    x_min, x_max = np.min(x_coords), np.max(x_coords)
+
+    # Define the linear thickness function
+    def linear_thickness(x):
+        return 0.5 + (x[0] - x_min) / (x_max - x_min) * 1.0
+
+    # Interpolate the thickness function into the scalar field
+    thickness.interpolate(linear_thickness)
+
     u_t = Function(V_u, name="InelasticDisplacement")
 
     def radial_field(x):
@@ -232,7 +254,10 @@ def run_computation(parameters, storage=None):
 
     dx = ufl.Measure("dx", domain=mesh)
 
-    model = ThinFilm(parameters["model"], eps_0=eps_t)
+    model = VariableThickness(thickness, parameters["model"], eps_0=eps_t)
+    __import__("pdb").set_trace()
+    # model = ThinFilm(parameters["model"], eps_0=eps_t)
+
     total_energy = model.total_energy_density(state) * dx
     load_par = parameters["loading"]
     loads = np.linspace(load_par["min"], load_par["max"], load_par["steps"])
@@ -273,7 +298,6 @@ def run_computation(parameters, storage=None):
         )
 
         _logger.critical(f"-- Solving Equilibrium (Criticality) for t = {t:3.2f} --")
-        __import__("pdb").set_trace()
         hybrid.solve(alpha_lb)
 
         _logger.critical(f"-- Solving Bifurcation (Uniqueness) for t = {t:3.2f} --")
@@ -354,11 +378,11 @@ def load_parameters(file_path, ndofs, model="at1"):
     with open(file_path) as f:
         parameters = yaml.load(f, Loader=yaml.FullLoader)
     parameters["geometry"]["mesh_size_factor"] = 3
-    parameters["geometry"]["R"] = 2.5
+    parameters["geometry"]["R"] = 2
 
     parameters["model"]["w1"] = 1
     parameters["model"]["ell"] = 0.05
-    parameters["model"]["ell_e"] = 0.2
+    parameters["model"]["ell_e"] = 0.5
     parameters["loading"]["min"] = 0.7
     parameters["loading"]["max"] = 1.5
     parameters["loading"]["steps"] = 30
@@ -388,7 +412,7 @@ if __name__ == "__main__":
 
     # Run computation
     # _storage = f"output/MPI-{MPI.COMM_WORLD.Get_size()}/{signature[0:6]}"
-    _storage = f"output/MPI-{MPI.COMM_WORLD.Get_size()}/test"
+    _storage = f"output/MPI-{MPI.COMM_WORLD.Get_size()}/test-variable-thickness"
     visualization = Visualization(_storage)
 
     with dolfinx.common.Timer(f"~Computation Experiment") as timer:

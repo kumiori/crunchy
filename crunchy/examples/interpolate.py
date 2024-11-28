@@ -26,11 +26,14 @@ y_grid = np.linspace(0, 1, image_resolution[1])
 
 image = generate_gaussian_field(image_resolution)
 
-from crunchy.filters import radial_blur_zoom
+from crunchy.filters import radial_blur_zoom, motion_blur
 
 zoom_amount = 30
+blur_distance = spin_amount = 30
+# image = radial_blur_zoom(image, amount=zoom_amount)
 
-image = radial_blur_zoom(image, amount=zoom_amount)
+
+image = motion_blur(image, blur_distance)
 
 # Set up the interpolator
 interpolator = RegularGridInterpolator((y_grid, x_grid), image)
@@ -41,12 +44,12 @@ xy_coordinates = dof_coordinates[:, :2]
 field_values = interpolator(xy_coordinates)
 
 # Create a function space on the mesh (P1 elements)
-V = FunctionSpace(mesh, ("CG", 1))  # Continuous Galerkin, degree 1
+V = fem.functionspace(mesh, ("CG", 1))  # Continuous Galerkin, degree 1
 
 # Create a Function in this space and assign the sampled values
 field_function = Function(V)
-field_function.vector.array[:] = field_values
-field_function.vector.ghostUpdate()
+field_function.x.petsc_vec.array[:] = field_values
+field_function.x.petsc_vec.ghostUpdate()
 
 
 # Create a VTK representation of the mesh
@@ -58,7 +61,7 @@ mesh_topology, mesh_cell_types, mesh_coordinates = vtk_mesh(V)
 grid = pv.UnstructuredGrid(mesh_topology, mesh_cell_types, mesh_coordinates)
 
 # Add the scalar field to the grid
-grid.point_data["Field"] = field_function.vector.array
+grid.point_data["Field"] = field_function.x.petsc_vec.array
 
 # Visualize the field
 plotter = pv.Plotter()
