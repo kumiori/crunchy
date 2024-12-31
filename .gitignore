@@ -3,3 +3,4 @@
 crunchy/crunchy.egg-info/**
 .DS_Store
 crunchy.egg-info/*
+**/output/**
