@@ -111,8 +111,6 @@ def plot_spectrum(history_data):
     fig, ax = plt.subplots(figsize=(10, 6))
 
     for step_idx, load_step in enumerate(load_steps):
-        print(f"Plotting spectrum for load step {step_idx} (load: {load_step})")
-        # # Plot eigs_ball for the current load step
         if eigs_ball:  # Ensure it's not empty
             _eigs_ball_step = eigs_ball[step_idx]
             ax.scatter(
@@ -124,17 +122,18 @@ def plot_spectrum(history_data):
             )
         ax.axhline(y=0, color="black", linestyle="--")
 
-        # # Plot eigs_cone for the current load step, if present
-        # if step_idx < len(eigs_cone):
-        # cone_data = eigs_cone[step_idx]
-        #     if not np.isnan(cone_data):  # Check if eigs_cone is valid
-        #         plt.axhline(
-        #             y=cone_data,
-        #             color="red",
-        #             linestyle="--",
-        #             label=f"eigs_cone (step {step_idx})",
-        #         )
-
+        if not np.all(np.isnan(eigs_cone)):  # Ensure it's not empty
+            _eigs_cone_step = eigs_cone[step_idx]
+            if type(_eigs_cone_step) is float:
+                _eigs_cone_step = [_eigs_cone_step]
+            ax.scatter(
+                [load_step] * len(_eigs_cone_step),
+                _eigs_cone_step,
+                marker="x",
+                # label=f"eigs_ball (step {step_idx})",
+                color="red",
+                alpha=0.7,
+            )
         # Add plot labels and legend
         # ax.title(f"Spectrum at Load Step {step_idx} (Load: {load_step})")
         # ax.set_xlabel("Eigenvalue Index")
@@ -155,16 +154,22 @@ def plot_spectrum(history_data):
 
 def run_computation(parameters, storage=None):
     _nameExp = parameters["geometry"]["geom_type"]
-    R = parameters["geometry"]["R"]
     lc = parameters["model"]["ell"] / parameters["geometry"]["mesh_size_factor"]
 
     # Get geometry model
     parameters["geometry"]["geom_type"]
 
-    gmsh_model, tdim = mesh_circle_gmshapi(
-        _nameExp, R, lc, tdim=2, order=1, msh_file=None, comm=MPI.COMM_WORLD
-    )
-    mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, model_rank, tdim)
+    Lx = parameters.get("geometry").get("Lx", 1.0)
+    Ly = parameters.get("geometry").get("Ly", 0.1)
+
+    with dolfinx.common.Timer("~Mesh Generation") as timer:
+        mesh = dolfinx.mesh.create_rectangle(
+            MPI.COMM_WORLD,
+            [np.array([0.0, 0.0]), np.array([Lx, Ly])],
+            [int(Lx / lc), int(Ly / lc)],
+            cell_type=dolfinx.mesh.CellType.triangle,
+        )
+        mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
 
     outdir = os.path.join(os.path.dirname(__file__), "output")
 
@@ -188,6 +193,12 @@ def run_computation(parameters, storage=None):
     V_u, V_alpha = create_function_spaces_2d(mesh)
     u, u_, alpha, β, v, state = initialise_functions(V_u, V_alpha)
 
+    _V_ux = V_u.sub(0)
+    V_ux, V_ux_to_V_u = _V_ux.collapse()
+
+    u_t = Function(V_u, name="InelasticDisplacement")
+    u_xt = Function(V_ux, name="BoundaryDisplacement")
+
     # Bounds
     alpha_ub = dolfinx.fem.Function(V_alpha, name="UpperBoundDamage")
     alpha_lb = dolfinx.fem.Function(V_alpha, name="LowerBoundDamage")
@@ -196,18 +207,33 @@ def run_computation(parameters, storage=None):
     # zero_u = Function(V_u, name="BoundaryDatum")
     # zero_u.interpolate(lambda x: (np.zeros_like(x[0]), np.zeros_like(x[1])))
 
-    u_t = Function(V_u, name="InelasticDisplacement")
-
-    def radial_field(x):
-        # r = np.sqrt(x[0]**2 + x[1]**2)
-        u_x = x[0]
-        u_y = x[1]
-        return np.array([u_x, u_y])
-
     tau = Constant(mesh, np.array(0.0, dtype=PETSc.ScalarType))
 
-    u_t.interpolate(lambda x: radial_field(x) * tau)
-    eps_t = tau * ufl.as_tensor([[1.0, 0], [0, 1.0]])
+    u_xt.interpolate(lambda x: 2.0 * tau * (x[0] - Lx / 2.0) / Lx)
+    eps_t = tau * ufl.as_tensor([[1.0, 0], [0, 0.0]])
+    eps_0 = ufl.as_tensor([[0.0, 0], [0, 0.0]])
+
+    with dolfinx.common.Timer("~Debug"):
+        from irrevolutions.utils.viz import plot_profile
+
+        plotter = pyvista.Plotter(
+            title="Test bcs",
+            window_size=[800, 600],
+            shape=(1, 1),
+        )
+        tol = 1e-3
+        xs = np.linspace(0 + tol, Lx - tol, 101)
+        points = np.zeros((3, 101))
+        points[0] = xs
+
+        profile, data = plot_profile(
+            u_xt,
+            points,
+            plotter,
+            subplotnumber=1,
+            lineproperties={"c": "k", "label": "$u_tx$"},
+        )
+        profile.savefig(f"{prefix}/profile.png")
 
     tdim = mesh.topology.dim
     fdim = tdim - 1
@@ -217,21 +243,45 @@ def run_computation(parameters, storage=None):
     alpha_lb.interpolate(lambda x: np.zeros_like(x[0]))
     alpha_ub.interpolate(lambda x: np.ones_like(x[0]))
 
-    u_boundary_dofs = dolfinx.fem.locate_dofs_topological(V_u, fdim, boundary_facets)
+    def ux_boundary(x):
+        return np.logical_or(np.isclose(x[0], 0.0), np.isclose(x[0], Lx))
 
-    for f in [u, u_t, alpha_lb, alpha_ub]:
+    ux_boundary_facets = dolfinx.mesh.locate_entities_boundary(
+        mesh, mesh.topology.dim - 1, ux_boundary
+    )
+    ux_boundary_dofs = dolfinx.fem.locate_dofs_topological(
+        V_u.sub(0), mesh.topology.dim - 1, ux_boundary_facets
+    )
+
+    # ux_boundary_dofs = dolfinx.fem.locate_dofs_geometrical(
+    #     V_u.sub(0).collapse()[0],
+    #     lambda x: np.logical_or(np.isclose(x[0], 0.0), np.isclose(x[0], Lx)),
+    # )
+
+    # u_boundary_dofs = dolfinx.fem.locate_dofs_topological(V_u, fdim, boundary_facets)
+    # ux_boundary_dofs = dolfinx.fem.locate_dofs_topological(V_ux, fdim, boundary_facets)
+    # ux_boundary_dofs = dolfinx.fem.locate_dofs_topological(
+    #     V_u.sub(0), fdim, boundary_facets
+    # )
+
+    for f in [u, u_t, u_xt, alpha_lb, alpha_ub]:
         f.x.petsc_vec.ghostUpdate(
             addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
         )
 
+    bcs_u = [dirichletbc(u_xt, ux_boundary_dofs)]
+    # __import__("pdb").set_trace()
+    # bcs_u = [dirichletbc(u_xt, ux_boundary_dofs, V_u.sub(0))]
+    # bcs_u = [dirichletbc(u_xt, ux_boundary_dofs)]
+    # bcs_u = [dirichletbc(u_xt, u_boundary_dofs)]
     # bcs_u = [dirichletbc(u_t, u_boundary_dofs)]
     bcs_u = []
     bcs_alpha = []
-
     bcs = {"bcs_u": bcs_u, "bcs_alpha": bcs_alpha}
 
     dx = ufl.Measure("dx", domain=mesh)
 
+    # model = ThinFilm(parameters["model"])
     model = ThinFilm(parameters["model"], eps_0=eps_t)
     total_energy = model.total_energy_density(state) * dx
     load_par = parameters["loading"]
@@ -273,7 +323,6 @@ def run_computation(parameters, storage=None):
         )
 
         _logger.critical(f"-- Solving Equilibrium (Criticality) for t = {t:3.2f} --")
-        __import__("pdb").set_trace()
         hybrid.solve(alpha_lb)
 
         _logger.critical(f"-- Solving Bifurcation (Uniqueness) for t = {t:3.2f} --")
@@ -339,7 +388,7 @@ def run_computation(parameters, storage=None):
     return history_data
 
 
-def load_parameters(file_path, ndofs, model="at1"):
+def load_parameters(file_path, model="at1"):
     """
     Load parameters from a YAML file.
 
@@ -347,48 +396,55 @@ def load_parameters(file_path, ndofs, model="at1"):
         file_path (str): Path to the YAML parameter file.
 
     Returns:
-        dict: Loaded parameters.
+        dict: Loaded parameters
+        str: Signature of the parameters
     """
     import hashlib
 
     with open(file_path) as f:
         parameters = yaml.load(f, Loader=yaml.FullLoader)
     parameters["geometry"]["mesh_size_factor"] = 3
-    parameters["geometry"]["R"] = 2.5
+    parameters["geometry"]["Lx"] = 3.0
+    parameters["geometry"]["Ly"] = 0.1
 
     parameters["model"]["w1"] = 1
-    parameters["model"]["ell"] = 0.05
-    parameters["model"]["ell_e"] = 0.2
-    parameters["loading"]["min"] = 0.7
-    parameters["loading"]["max"] = 1.5
-    parameters["loading"]["steps"] = 30
+    parameters["model"]["ell"] = 0.1
+    parameters["model"]["ell_e"] = 0.3
+
+    parameters["loading"]["min"] = 0.99
+    parameters["loading"]["max"] = 1.7
+    parameters["loading"]["steps"] = 100
 
     parameters["solvers"]["damage"]["snes"]["snes_monitor"] = None
     parameters["solvers"]["elasticity"]["snes"]["snes_monitor"] = None
     parameters["solvers"]["newton"]["snes_monitor"] = None
 
-    parameters["solvers"]["damage_elasticity"]["max_it"] = 2000
-    parameters["solvers"]["damage_elasticity"]["alpha_rtol"] = 1e-5
+    parameters["solvers"]["damage_elasticity"]["max_it"] = 1000
+    parameters["solvers"]["damage_elasticity"]["alpha_rtol"] = 1e-4
 
     signature = hashlib.md5(str(parameters).encode("utf-8")).hexdigest()
 
     return parameters, signature
 
 
+import importlib.resources as pkg_resources  # Python 3.7+ for accessing package files
+
 if __name__ == "__main__":
     # Set the logging level
     logging.basicConfig(level=logging.INFO)
 
+    # with pkg_resources.path("crunchy.test", "parameters.yml") as f:
+    #     print(f"Parameters file: {f}")
+
     # Load parameters
     parameters, signature = load_parameters(
         os.path.join(os.path.dirname(__file__), "parameters.yaml"),
-        ndofs=100,
         model="at1",
     )
 
     # Run computation
     # _storage = f"output/MPI-{MPI.COMM_WORLD.Get_size()}/{signature[0:6]}"
-    _storage = f"output/MPI-{MPI.COMM_WORLD.Get_size()}/test"
+    _storage = f"output/thinfilm/MPI-{MPI.COMM_WORLD.Get_size()}"
     visualization = Visualization(_storage)
 
     with dolfinx.common.Timer(f"~Computation Experiment") as timer:

@@ -1,5 +1,59 @@
 import numpy as np
 
+import numpy as np
+from dolfinx.fem import Function
+from petsc4py import PETSc
+
+
+def generate_gaussian_function(V, mean=0.0, std=1.0, seed=None):
+    """
+    Generate a random Gaussian noise field in parallel and interpolate it onto a function space.
+
+    Parameters:
+        V: dolfinx.fem.FunctionSpace
+            Function space to interpolate the noise onto.
+        mean: float
+            Mean of the Gaussian distribution.
+        std: float
+            Standard deviation of the Gaussian distribution.
+        seed: int, optional
+            Random seed for reproducibility.
+
+    Returns:
+        Function
+            A Dolfinx Function containing the parallel-consistent random Gaussian noise.
+    """
+    # Get the local vector size
+    local_size = V.dofmap.index_map.size_local
+    global_size = V.dofmap.index_map.size_global
+    rank = V.mesh.comm.rank
+
+    # Set random seed for reproducibility across ranks
+    if seed is not None:
+        global_seed = seed + rank  # Ensure unique seeds per rank
+    else:
+        global_seed = None
+
+    rng = np.random.default_rng(global_seed)
+
+    # Generate local Gaussian noise
+    local_noise = rng.normal(loc=mean, scale=std, size=local_size)
+
+    # Create a PETSc vector for global noise
+    noise = Function(V, name="Noise")
+    global_array = noise.x.petsc_vec.array
+
+    # Distribute the local noise to the global vector
+    global_array[:] = 0.0  # Initialize
+    global_array[:local_size] = local_noise
+
+    # Synchronize ghost values
+    noise.x.petsc_vec.ghostUpdate(
+        addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
+    )
+
+    return noise
+
 
 def generate_gaussian_field(shape=(100, 100), mean=0, std=1):
     """Generate a 2D Gaussian field."""
