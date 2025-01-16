@@ -81,7 +81,8 @@ model_rank = 0
 
 
 def run_computation(parameters, storage=None):
-    Lx = parameters["geometry"]["Lx"]
+    Lx = 1  # noqa: E999
+    # parameters["geometry"]["Lx"]
     _nameExp = parameters["geometry"]["geom_type"]
     parameters["model"]["ell"]
 
@@ -112,9 +113,6 @@ def run_computation(parameters, storage=None):
     # Bounds
     alpha_ub = dolfinx.fem.Function(V_alpha, name="UpperBoundDamage")
     alpha_lb = dolfinx.fem.Function(V_alpha, name="LowerBoundDamage")
-
-    # Useful references
-    Lx = parameters.get("geometry").get("Lx")
 
     # Define the state
     zero_u = Function(V_u, name="BoundaryUnknown")
@@ -188,12 +186,13 @@ def run_computation(parameters, storage=None):
 
     while True:
         try:
-            i_t = next(iterator)
-            # next increments the self index
+            # i_t = next(iterator)
+            i_t = next(iterator) - 1
         except StopIteration:
             break
 
         # Perform your time step with t
+
         eps_t.value = loads[i_t]
         u_zero.interpolate(lambda x: eps_t / 2.0 * (2 * x[0] - Lx))
         u_zero.x.petsc_vec.ghostUpdate(
@@ -275,8 +274,16 @@ def run_computation(parameters, storage=None):
                 plt.close()
 
                 tol = 1e-3
-                xs = np.linspace(0 + tol, Lx - tol, 101)
-                points = np.zeros((3, 101))
+                assert Lx == 1
+                npoints = int(
+                    (
+                        parameters["model"]["ell"]
+                        / parameters["geometry"]["mesh_size_factor"]
+                    )
+                    ** (-1)
+                )
+                xs = np.linspace(0 + tol, Lx - tol, npoints)
+                points = np.zeros((3, npoints))
                 points[0] = xs
 
                 plotter = pyvista.Plotter(
@@ -435,10 +442,14 @@ def postprocess(
             window_size=[800, 600],
             shape=(1, 1),
         )
+        npoints = int(
+            (parameters["model"]["ell"] / parameters["geometry"]["mesh_size_factor"])
+            ** (-1)
+        )
 
         tol = 1e-3
-        xs = np.linspace(0 + tol, parameters["geometry"]["Lx"] - tol, 101)
-        points = np.zeros((3, 101))
+        xs = np.linspace(0 + tol, parameters["geometry"]["Lx"] - tol, npoints)
+        points = np.zeros((3, npoints))
         points[0] = xs
 
         _plt, data = plot_profile(
@@ -527,6 +538,9 @@ def postprocess(
                 ax.axhline(0, color="k", lw=0.5)
                 fig_bif.savefig(f"{prefix}/second_order_profiles-{i_t}.png")
 
+        # close figures
+        matplotlib.pyplot.close("all")
+
     return fracture_energy, elastic_energy
 
 
@@ -548,8 +562,6 @@ def load_parameters(file_path, ndofs, model="at1"):
     parameters["model"]["model_dimension"] = 1
     parameters["model"]["model_type"] = "1D"
 
-    L = 2
-
     if model == "at2":
         parameters["model"]["at_number"] = 2
         parameters["loading"]["min"] = 0.0
@@ -561,8 +573,11 @@ def load_parameters(file_path, ndofs, model="at1"):
         parameters["loading"]["max"] = 1.3
         parameters["loading"]["steps"] = 30
 
+    parameters["geometry"]["Lx"] = 1.0
+    Lx = parameters["geometry"]["Lx"]
+
     parameters["geometry"]["geom_type"] = "1d-film"
-    parameters["geometry"]["mesh_size_factor"] = 5
+    parameters["geometry"]["mesh_size_factor"] = 4
 
     parameters["stability"]["cone"]["cone_max_it"] = 400000
     parameters["stability"]["cone"]["cone_atol"] = 1e-6
@@ -570,14 +585,16 @@ def load_parameters(file_path, ndofs, model="at1"):
     parameters["stability"]["cone"]["scaling"] = 1e-4
 
     parameters["model"]["w1"] = 1
-    parameters["model"]["ell"] = 0.05 / L
+    parameters["model"]["ell"] = 0.05 / Lx
     parameters["model"]["k_res"] = 0.0
     parameters["model"]["mu"] = 1
-    parameters["model"]["kappa"] = (0.2 / L) ** (-2)
-
-    parameters["solvers"]["damage_elasticity"]["alpha_rtol"] = 1e-5
-    parameters["solvers"]["newton"]["snes_atol"] = 1e-12
-    parameters["solvers"]["newton"]["snes_rtol"] = 1e-12
+    # ell_e = parameters["model"]["ell"] * 3
+    # parameters["model"]["kappa"] = (ell_e**2 / Lx**2) ** (-2)
+    parameters["model"]["kappa"] = 100
+    parameters["solvers"]["damage_elasticity"]["alpha_rtol"] = 1e-6
+    parameters["solvers"]["damage_elasticity"]["max_it"] = 400
+    parameters["solvers"]["newton"]["snes_atol"] = 1e-8
+    parameters["solvers"]["newton"]["snes_rtol"] = 1e-8
 
     signature = hashlib.md5(str(parameters).encode("utf-8")).hexdigest()
 
@@ -596,7 +613,7 @@ if __name__ == "__main__":
     )
 
     # Run computation
-    _storage = f"../output/1d-film-second-order-stability-kick/MPI-{MPI.COMM_WORLD.Get_size()}/{signature[0:6]}"
+    _storage = f"output/film1d/MPI-{MPI.COMM_WORLD.Get_size()}/{signature[0:6]}"
     visualization = Visualization(_storage)
 
     with dolfinx.common.Timer(f"~Computation Experiment") as timer:
