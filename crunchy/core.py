@@ -75,6 +75,30 @@ def create_function_spaces_2d(mesh):
     return V_u, V_alpha
 
 
+def create_function_spaces_nd(mesh, dim):
+    """
+    Create function spaces for displacement and scalar fields in an arbitrary dimension.
+
+    Parameters:
+    - mesh: The mesh object for the domain.
+    - dim: The spatial dimension of the problem (e.g., 1, 2, or 3).
+
+    Returns:
+    - V_u: Function space for vector fields (displacement).
+    - V_alpha: Function space for scalar fields (e.g., damage or pressure).
+    """
+    # Define the vector element for displacement (dim components)
+    element_u = basix.ufl.element("Lagrange", mesh.basix_cell(), degree=1, shape=(dim,))
+    # Define the scalar element for damage or other scalar fields
+    element_alpha = basix.ufl.element("Lagrange", mesh.basix_cell(), degree=1)
+
+    # Create function spaces
+    V_u = dolfinx.fem.functionspace(mesh, element_u)
+    V_alpha = dolfinx.fem.functionspace(mesh, element_alpha)
+
+    return V_u, V_alpha
+
+
 def initialise_functions(V_u, V_alpha):
     u = dolfinx.fem.Function(V_u, name="Displacement")
     u_ = dolfinx.fem.Function(V_u, name="BoundaryDisplacement")

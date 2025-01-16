@@ -139,29 +139,3 @@ def save_parameters(parameters, prefix):
 
 # from ufl import VectorElement, FiniteElement, Measure
 from dolfinx import mesh, fem
-
-
-# def create_function_spaces_1d(mesh):
-#     element_u = FiniteElement("Lagrange", mesh.ufl_cell(), degree=1)
-#     element_alpha = FiniteElement("Lagrange", mesh.ufl_cell(), degree=1)
-#     V_u = fem.FunctionSpace(mesh, element_u)
-#     V_alpha = fem.FunctionSpace(mesh, element_alpha)
-#     return V_u, V_alpha
-
-
-# def create_function_spaces_2d(mesh):
-#     element_u = VectorElement("Lagrange", mesh.ufl_cell(), degree=1, dim=2)
-#     element_alpha = FiniteElement("Lagrange", mesh.ufl_cell(), degree=1)
-#     V_u = fem.FunctionSpace(mesh, element_u)
-#     V_alpha = fem.FunctionSpace(mesh, element_alpha)
-#     return V_u, V_alpha
-
-# def initialize_functions(V_u, V_alpha):
-#     u = fem.Function(V_u, name="Displacement")
-#     u_ = fem.Function(V_u, name="BoundaryDisplacement")
-#     alpha = fem.Function(V_alpha, name="Damage")
-#     beta = fem.Function(V_alpha, name="DamagePerturbation")
-#     v = fem.Function(V_u, name="DisplacementPerturbation")
-#     state = {"u": u, "alpha": alpha}
-
-#     return u, u_, alpha, beta, v, state
