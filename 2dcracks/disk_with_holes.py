@@ -69,7 +69,10 @@ comm = MPI.COMM_WORLD
 # Mesh on node model_rank and then distribute
 model_rank = 0
 
-from crunchy.mesh import mesh_circle_with_holes_gmshapi
+from crunchy.mesh import (
+    mesh_circle_with_holes_gmshapi_old,
+    mesh_circle_with_holes_gmshapi,
+)
 
 
 def run_computation(parameters, storage=None):
@@ -88,24 +91,23 @@ def run_computation(parameters, storage=None):
         str(parameters["geometry"]).encode("utf-8")
     ).hexdigest()
 
-    msh_file = f"meshwithholes-{geom_signature}.msh"
-    if not os.path.exists(msh_file):
-        gmsh_model, tdim = mesh_circle_with_holes_gmshapi(
-            "discwithholes",
-            R,
-            lc,
-            tdim=2,
-            num_holes=3,
-            hole_radius=0.05,
-            hole_positions=None,
-            refinement_factor=0.8,
-            order=1,
-            msh_file=msh_file,
-            comm=MPI.COMM_WORLD,
-        )
+    msh_file = f"meshes/meshwithholes-{geom_signature}.msh"
+    # if not os.path.exists(msh_file):
+    gmsh_model, tdim = mesh_circle_with_holes_gmshapi(
+        "discwithholes",
+        R,
+        lc=lc,
+        tdim=2,
+        num_holes=4,
+        hole_radius=0.05,
+        hole_positions=None,
+        refinement_factor=0.8,
+        order=1,
+        msh_file=msh_file,
+        comm=MPI.COMM_WORLD,
+    )
 
     mesh, cell_tags, facet_tags = gmshio.read_from_msh(msh_file, comm=MPI.COMM_WORLD)
-    # mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, 0, tdim)
 
     with XDMFFile(
         comm, f"{prefix}/{_nameExp}.xdmf", "w", encoding=XDMFFile.Encoding.HDF5
@@ -117,6 +119,7 @@ def run_computation(parameters, storage=None):
         ax = plot_mesh(mesh)
         fig = ax.get_figure()
         fig.savefig(f"{prefix}/mesh.png")
+        fig.savefig(f"{msh_file[0:-3]}.png")
 
     # Functional Setting
 
@@ -127,6 +130,40 @@ def run_computation(parameters, storage=None):
     alpha_ub = dolfinx.fem.Function(V_alpha, name="UpperBoundDamage")
     alpha_lb = dolfinx.fem.Function(V_alpha, name="LowerBoundDamage")
 
+    def radial_field(x):
+        # r = np.sqrt(x[0]**2 + x[1]**2)
+        u_x = x[0]
+        u_y = x[1]
+        return np.array([u_x, u_y])
+
+    tau = Constant(mesh, np.array(0.0, dtype=PETSc.ScalarType))
+    u_t = Function(V_u, name="InelasticDisplacement")
+
+    u_t.interpolate(lambda x: radial_field(x) * tau)
+    eps_t = tau * ufl.as_tensor([[1.0, 0], [0, 1.0]])
+
+    tdim = mesh.topology.dim
+    fdim = tdim - 1
+    mesh.topology.create_connectivity(fdim, tdim)
+    boundary_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
+
+    for f in [u, u_t, alpha_lb, alpha_ub]:
+        f.x.petsc_vec.ghostUpdate(
+            addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
+        )
+
+    boundary_dofs = dolfinx.fem.locate_dofs_topological(
+        V_u, mesh.topology.dim - 1, facet_tags.indices
+    )
+    holes_bc_values = dolfinx.fem.Constant(mesh, PETSc.ScalarType([0.0, 0.0]))
+
+    bcs_u = [dolfinx.fem.dirichletbc(holes_bc_values, boundary_dofs, V_u)]
+
+    # bcs_u = []
+    bcs_alpha = []
+
+    bcs = {"bcs_u": bcs_u, "bcs_alpha": bcs_alpha}
+    __import__("pdb").set_trace()
     return history_data
 
 
