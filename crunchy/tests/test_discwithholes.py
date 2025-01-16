@@ -4,6 +4,7 @@ from dolfinx.io import gmshio, XDMFFile
 import numpy as np
 from crunchy.mesh import (
     mesh_circle_with_holes_gmshapi,
+    mesh_circle_with_holes_gmshapi_old,
 )
 from petsc4py import PETSc
 import matplotlib.pyplot as plt
@@ -56,23 +57,24 @@ import os
 # otherwise create it
 
 msh_file = "meshwithholes.msh"
-if not os.path.exists(msh_file):
-    gmsh_model, tdim = mesh_circle_with_holes_gmshapi(
-        "discwithholes",
-        R,
-        lc,
-        tdim=2,
-        num_holes=3,
-        hole_radius=0.05,
-        hole_positions=None,
-        refinement_factor=0.8,
-        order=1,
-        msh_file=msh_file,
-        comm=MPI.COMM_WORLD,
-    )
+# if not os.path.exists(msh_file):
+gmsh_model, tdim = mesh_circle_with_holes_gmshapi(
+    "discwithholes",
+    R,
+    lc,
+    tdim=2,
+    num_holes=3,
+    hole_radius=0.05,
+    hole_positions=None,
+    refinement_factor=0.8,
+    order=1,
+    msh_file=msh_file,
+    comm=MPI.COMM_WORLD,
+)
 
-mesh, cell_tags, facet_tags = gmshio.read_from_msh(msh_file, comm=MPI.COMM_WORLD)
-# mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, 0, tdim)
+mesh, cell_tags, facet_tags = gmshio.read_from_msh(
+    msh_file, gdim=2, comm=MPI.COMM_WORLD
+)
 mesh.topology.create_connectivity(tdim - 1, tdim)
 
 if comm.rank == 0:
@@ -87,10 +89,17 @@ if comm.rank == 0:
 # Apply zero Dirichlet condition on the hole boundaries
 import basix
 from dolfinx.fem import functionspace
+import ufl
 
 element = basix.ufl.element("Lagrange", mesh.basix_cell(), degree=1, shape=(2,))
 V = functionspace(mesh, element)
+u = fem.Function(V)
+print(f"Mesh topological dimension: {mesh.topology.dim}")
+print(f"Mesh geometric dimension: {mesh.geometry.dim}")
+# mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, 0, tdim)
+__import__("pdb").set_trace()
 
+ufl.sym(ufl.grad(u))
 bc_values = fem.Constant(mesh, PETSc.ScalarType([0.0, 0.0]))
 bcs = []
 
@@ -98,5 +107,5 @@ boundary_dofs = fem.locate_dofs_topological(
     V, mesh.topology.dim - 1, facet_tags.indices
 )
 bc = fem.dirichletbc(bc_values, boundary_dofs, V)
-
+print(facet_tags.indices)
 __import__("pdb").set_trace()

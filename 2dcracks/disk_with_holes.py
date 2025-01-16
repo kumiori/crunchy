@@ -107,7 +107,9 @@ def run_computation(parameters, storage=None):
         comm=MPI.COMM_WORLD,
     )
 
-    mesh, cell_tags, facet_tags = gmshio.read_from_msh(msh_file, comm=MPI.COMM_WORLD)
+    mesh, cell_tags, facet_tags = gmshio.read_from_msh(
+        msh_file, gdim=2, comm=MPI.COMM_WORLD
+    )
 
     with XDMFFile(
         comm, f"{prefix}/{_nameExp}.xdmf", "w", encoding=XDMFFile.Encoding.HDF5
@@ -122,6 +124,10 @@ def run_computation(parameters, storage=None):
         fig.savefig(f"{msh_file[0:-3]}.png")
 
     # Functional Setting
+    gmsh_model, tdim = mesh_circle_gmshapi(
+        _nameExp, R, lc, tdim=2, order=1, msh_file=None, comm=MPI.COMM_WORLD
+    )
+    mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, model_rank, tdim)
 
     V_u, V_alpha = create_function_spaces_2d(mesh)
     u, u_, alpha, β, v, state = initialise_functions(V_u, V_alpha)
@@ -156,14 +162,46 @@ def run_computation(parameters, storage=None):
         V_u, mesh.topology.dim - 1, facet_tags.indices
     )
     holes_bc_values = dolfinx.fem.Constant(mesh, PETSc.ScalarType([0.0, 0.0]))
-
     bcs_u = [dolfinx.fem.dirichletbc(holes_bc_values, boundary_dofs, V_u)]
 
     # bcs_u = []
     bcs_alpha = []
 
     bcs = {"bcs_u": bcs_u, "bcs_alpha": bcs_alpha}
-    __import__("pdb").set_trace()
+
+    dx = ufl.Measure("dx", domain=mesh)
+
+    model = ThinFilm(parameters["model"], eps_0=eps_t)
+    total_energy = model.total_energy_density(state) * dx
+    load_par = parameters["loading"]
+    loads = np.linspace(load_par["min"], load_par["max"], load_par["steps"])
+
+    hybrid = HybridSolver(
+        total_energy,
+        state,
+        bcs,
+        bounds=(alpha_lb, alpha_ub),
+        solver_parameters=parameters.get("solvers"),
+    )
+    hybrid.damage.solver.setMonitor(None)
+    hybrid.elasticity.solver.setMonitor(None)
+
+    bifurcation = BifurcationSolver(
+        total_energy, state, bcs, bifurcation_parameters=parameters.get("stability")
+    )
+
+    stability = StabilitySolver(
+        total_energy, state, bcs, cone_parameters=parameters.get("stability")
+    )
+
+    linesearch = LineSearch(
+        total_energy,
+        state,
+        linesearch_parameters=parameters.get("stability").get("linesearch"),
+    )
+
+    iterator = StabilityStepper(loads)
+
     return history_data
 
 
