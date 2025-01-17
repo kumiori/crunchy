@@ -97,7 +97,7 @@ def split_stress(stress_tensor):
     return sigma_hydrostatic, sigma_deviatoric
 
 
-def save_stress_components(mesh, stress_tensor, output_file):
+def save_stress_components(mesh, stress_tensor, output_file, t=0):
     """
     Save stress tensor components, hydrostatic, and deviatoric parts.
 
@@ -157,12 +157,11 @@ def save_stress_components(mesh, stress_tensor, output_file):
     deviatoric.interpolate(sigma_dev_expr)
 
     # Save to XDMF
-    with XDMFFile(mesh.comm, output_file, "w") as xdmf:
-        xdmf.write_mesh(mesh)
-        xdmf.write_function(hydrostatic)
-        xdmf.write_function(stress_vector_function)
-        xdmf.write_function(deviatoric)
-        __import__("pdb").set_trace()
+    with XDMFFile(mesh.comm, output_file, "a") as xdmf:
+        # xdmf.write_mesh(mesh)
+        xdmf.write_function(hydrostatic, t)
+        xdmf.write_function(stress_vector_function, t)
+        xdmf.write_function(deviatoric, t)
 
 
 def run_computation(parameters, storage=None):
@@ -205,6 +204,11 @@ def run_computation(parameters, storage=None):
         comm, f"{prefix}/{_nameExp}.xdmf", "w", encoding=XDMFFile.Encoding.HDF5
     ) as file:
         file.write_mesh(mesh)
+
+    stress_output_file = f"{prefix}/stress.xdmf"
+    # Save to XDMF
+    with XDMFFile(mesh.comm, stress_output_file, "w") as xdmf:
+        xdmf.write_mesh(mesh)
 
     if comm.rank == 0:
         plt.figure()
@@ -360,13 +364,9 @@ def run_computation(parameters, storage=None):
                 shape=(1, 2),
             )
 
-            # _plt = plot_scalar(u_.sub(0), plotter, subplot=(0, 0))
+            _plt = plot_scalar(alpha, plotter, subplot=(0, 0))
             _plt = plot_vector(u, plotter, subplot=(0, 1))
-            _plt.screenshot(
-                os.path.join(
-                    prefix, f"elasticity_displacement_MPI{comm.size}-{i_t}.png"
-                )
-            )
+            _plt.screenshot(os.path.join(prefix, f"state_MPI{comm.size}-{i_t}.png"))
 
             average_stress = model.stress_average(model.eps(u), alpha)
             stress = model.stress(model.eps(u), alpha)
@@ -377,10 +377,7 @@ def run_computation(parameters, storage=None):
                 ]
             )
 
-            save_stress_components(
-                mesh, stress_projected, f"{prefix}/stress_components.xdmf"
-            )
-
+            save_stress_components(mesh, stress_projected, stress_output_file, t)
         with dolfinx.common.Timer(f"~Output and Storage") as timer:
             with XDMFFile(
                 comm,
