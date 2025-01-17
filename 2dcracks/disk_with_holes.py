@@ -74,6 +74,11 @@ from crunchy.mesh import (
     mesh_circle_with_holes_gmshapi_old,
     mesh_circle_with_holes_gmshapi,
 )
+from irrevolutions.utils.plots import (
+    plot_energies,
+)
+
+from crunchy.utils import plot_spectrum
 
 
 def split_stress(stress_tensor):
@@ -272,7 +277,7 @@ def run_computation(parameters, storage=None):
     # __import__("pdb").set_trace()
     bcs_u = [
         dolfinx.fem.dirichletbc(holes_bc_values, boundary_dofs, V_u),
-        dolfinx.fem.dirichletbc(u_t, u_boundary_dofs),
+        # dolfinx.fem.dirichletbc(u_t, u_boundary_dofs),
     ]
 
     # bcs_u = []
@@ -355,6 +360,27 @@ def run_computation(parameters, storage=None):
                 op=MPI.SUM,
             )
 
+        history_data["elastic_energy"].append(elastic_energy)
+        history_data["fracture_energy"].append(fracture_energy)
+        history_data["total_energy"].append(elastic_energy + fracture_energy)
+        history_data["load"].append(t)
+        history_data["unique"].append(is_unique)
+        history_data["stable"].append(stable)
+        history_data["inertia"].append(inertia)
+        history_data["eigs_cone"].append(stability.solution["lambda_t"])
+        history_data["eigs_ball"].append(bifurcation.data["eigs"])
+        history_data["equilibrium_data"].append(hybrid.data)
+        history_data["cone_data"].append(stability.data)
+
+        with dolfinx.common.Timer("~Postprocessing and Vis"):
+            fig, ax = plot_energies(history_data, _storage)
+            fig.savefig(f"{_storage}/energies.png")
+            plt.close(fig)
+
+            fig, ax = plot_spectrum(history_data)
+            fig.savefig(f"{_storage}/spectrum-Λ={parameters['model']['ell_e']}.png")
+            plt.close(fig)
+
             # xvfb.start_xvfb(wait=0.05)
             pyvista.OFF_SCREEN = True
 
@@ -378,6 +404,7 @@ def run_computation(parameters, storage=None):
             )
 
             save_stress_components(mesh, stress_projected, stress_output_file, t)
+
         with dolfinx.common.Timer(f"~Output and Storage") as timer:
             with XDMFFile(
                 comm,
@@ -388,18 +415,6 @@ def run_computation(parameters, storage=None):
                 file.write_function(u, t)
                 file.write_function(alpha, t)
                 # file.write_function(stress_h, t)
-
-        history_data["elastic_energy"].append(elastic_energy)
-        history_data["fracture_energy"].append(fracture_energy)
-        history_data["total_energy"].append(elastic_energy + fracture_energy)
-        history_data["load"].append(t)
-        history_data["unique"].append(is_unique)
-        history_data["stable"].append(stable)
-        history_data["inertia"].append(inertia)
-        history_data["eigs_cone"].append(stability.solution["lambda_t"])
-        history_data["eigs_ball"].append(bifurcation.data["eigs"])
-        history_data["equilibrium_data"].append(hybrid.data)
-        history_data["cone_data"].append(stability.data)
 
     return history_data
 
