@@ -12,7 +12,6 @@ from crunchy.core import (
     create_function_spaces_nd,
     setup_output_directory,
     save_parameters,
-    create_function_spaces_2d,
     initialise_functions,
 )
 
@@ -68,7 +67,6 @@ from petsc4py import PETSc
 from pyvista.plotting.utilities import xvfb
 import random
 import matplotlib.pyplot as plt
-from irrevolutions.models.one_dimensional import FilmModel1D as ThinFilm
 
 petsc4py.init(sys.argv)
 comm = MPI.COMM_WORLD
