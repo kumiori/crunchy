@@ -17,6 +17,7 @@ from mpi4py import MPI
 from petsc4py import PETSc
 from irrevolutions.algorithms.so import BifurcationSolver, StabilitySolver
 from irrevolutions.algorithms.am import HybridSolver
+from irrevolutions.algorithms.ls import StabilityStepper, LineSearch
 from irrevolutions.utils import setup_logger_mpi, _logger, Visualization, ColorPrint
 from dolfinx.common import list_timings
 
@@ -28,6 +29,7 @@ from crunchy.core import (
     initialise_functions,
 )
 from irrevolutions.models.one_dimensional import FilmModel1D as ThinFilm
+from irrevolutions.solvers.function import vec_to_functions
 
 comm = MPI.COMM_WORLD
 
@@ -95,8 +97,9 @@ def run_computation(parameters, storage=None, logger=_logger):
         parameters["loading"]["max"],
         parameters["loading"]["steps"],
     )
+    iterator = StabilityStepper(loads)
 
-    hybrid = HybridSolver(
+    equilibrium = HybridSolver(
         total_energy,
         state,
         bcs,
@@ -112,7 +115,88 @@ def run_computation(parameters, storage=None, logger=_logger):
         total_energy, state, bcs, cone_parameters=parameters.get("stability")
     )
 
+    linesearch = LineSearch(
+        total_energy,
+        state,
+        linesearch_parameters=parameters.get("stability").get("linesearch"),
+    )
+
     logging.basicConfig(level=logging.INFO)
+
+    arclength = []
+    perturbation_log = {
+        "steps": [],
+        "time_stamps": [],
+        "perturbations": [],
+    }
+
+    while True:
+        try:
+            # i_t = next(iterator)
+            i_t = next(iterator) - 1
+        except StopIteration:
+            break
+
+        # Perform your time step with t
+
+        eps_t.value = loads[i_t]
+        u_zero.interpolate(lambda x: eps_t / 2.0 * (2 * x[0] - Lx))
+        u_zero.x.petsc_vec.ghostUpdate(
+            addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
+        )
+
+        alpha.x.petsc_vec.copy(alpha_lb.x.petsc_vec)
+        alpha_lb.x.petsc_vec.ghostUpdate(
+            addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
+        )
+
+        # Log current load
+        _logger.critical(f"-- Solving for t = {loads[i_t]:3.2f} --")
+        with dolfinx.common.Timer(f"~First Order: Equilibrium") as timer:
+            equilibrium.solve(alpha_lb)
+
+        is_unique = bifurcation.solve(alpha_lb)
+        is_elastic = not bifurcation._is_critical(alpha_lb)
+        inertia = bifurcation.get_inertia()
+
+        z0 = (
+            bifurcation._spectrum[0]["xk"]
+            if bifurcation._spectrum and "xk" in bifurcation._spectrum[0]
+            else None
+        )
+
+        stable = stability.solve(alpha_lb, eig0=z0, inertia=inertia)
+
+        _logger.info(f"Stability of state at load {loads[i_t]:.2f}: {stable}")
+        ColorPrint.print_bold(f"Evolution is unique: {is_unique}")
+        ColorPrint.print_bold(f"State's inertia: {inertia}")
+        ColorPrint.print_bold(f"State's stable: {stable}")
+        ColorPrint.print_bold(f"===================- {_storage} -=================")
+
+        if not stable:
+            iterator.pause_time()
+            _logger.info(f"Time paused at {loads[i_t]:.2f}")
+            vec_to_functions(stability.solution["xt"], [v, β])
+            perturbation = {"v": v, "beta": β}
+            interval = linesearch.get_unilateral_interval(state, perturbation)
+
+            order = 4
+            h_opt, energies_1d, p, _ = linesearch.search(
+                state, perturbation, interval, m=order
+            )
+            arclength.append((i_t, loads[i_t], h_opt))
+            linesearch.perturb(state, perturbation, h_opt)
+
+            perturbation_entry = {
+                "step": i_t,
+                "time": loads[i_t],
+                "interval": interval,
+                "h_opt": h_opt,
+                "cone_lambda_t": stability.solution["lambda_t"],
+                "eigenvalues": bifurcation.data["eigs"],
+                "energy_profile": energies_1d,
+            }
+            perturbation_log["steps"].append(perturbation_entry)
 
 
 def load_parameters(file_path, ndofs, model="at2"):
