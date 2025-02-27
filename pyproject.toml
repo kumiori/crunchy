@@ -1,3 +1,25 @@
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "crunchy"  
+version = "0.1.0" 
+description = "A scientific toolkit package for fracture simulations"  
+authors = [
+    {name = "A. León Baldelli", email = "leon.baldelli@cnrs.fr"}  
+]
+dependencies = [
+    "irrevolutions @ git+https://github.com/kumiori/irrevolutions.git",
+    "visuals @ git+https://github.com/kumiori/visuals.git",
+    "preposterous @ git+https://github.com/kumiori/preposterous.git",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "h5py",
+    "pandas"
+]
+requires-python = ">=3.8"
+readme = "README.md"
+[tool.hatch.envs.default.scripts]
+update-irrev = 'pip install  --force-reinstall --no-deps --ignore-installed --no-cache-dir -U "irrevolutions @ git+https://github.com/kumiori/irrevolutions.git"'
