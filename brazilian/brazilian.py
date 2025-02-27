@@ -15,6 +15,7 @@ from irrevolutions.algorithms.am import HybridSolver
 from irrevolutions.algorithms.so import BifurcationSolver, StabilitySolver
 from irrevolutions.algorithms.ls import StabilityStepper, LineSearch
 from irrevolutions.meshes.boolean import create_disk_with_hole
+from irrevolutions.meshes.primitives import mesh_bar_gmshapi
 from dolfinx.mesh import CellType
 from crunchy.core import (
     initialise_functions,
@@ -23,6 +24,13 @@ from crunchy.core import (
     save_parameters,
     initialise_functions,
 )
+from dolfinx.fem import Function, locate_dofs_topological, dirichletbc
+from mpi4py import MPI
+from petsc4py import PETSc
+from ufl import (
+    Measure,
+)
+import numpy as np
 import yaml
 import hashlib
 
@@ -31,17 +39,22 @@ model_rank = 0
 
 
 def run_computation(parameters, storage):
+    nameExp = parameters["geometry"]["geom_type"]
     geom_params = {
         "R_outer": 1.0,  # Outer disk radius
         "R_inner": 0.3,  # Inner hole radius (set to 0.0 for no hole)
         "lc": 0.05,  # Mesh element size
         "a": 0.1,  # Half-width of the refined region (-a < x < a)
     }
-    # gmsh_model, tdim = create_disk_with_hole(comm, geom_params)
-    # mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, model_rank, tdim)
-    mesh = dolfinx.mesh.create_rectangle(
-        MPI.COMM_WORLD, [[0.0, 0.0], [1, 0.1]], [100, 10], cell_type=CellType.triangle
-    )
+    with dolfinx.common.Timer(f"~Meshing") as timer:
+        gmsh_model, tdim = create_disk_with_hole(comm, geom_params)
+        # gmsh_model, tdim = mesh_bar_gmshapi("bar", 1, 0.1, 0.1, 2)
+
+        mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, model_rank, tdim)
+    # mesh = dolfinx.mesh.create_rectangle(
+    #     MPI.COMM_WORLD, [[0.0, 0.0], [1, 0.1]], [100, 10], cell_type=CellType.triangle
+    # )
+    dx = Measure("dx", domain=mesh)
 
     outdir = os.path.join(os.path.dirname(__file__), "output")
     prefix = setup_output_directory(storage, parameters, outdir)
@@ -49,28 +62,84 @@ def run_computation(parameters, storage):
     signature = hashlib.md5(str(parameters).encode("utf-8")).hexdigest()
     save_parameters(parameters, prefix)
 
-    # equilibrium = HybridSolver(
-    #     total_energy,
-    #     state,
-    #     bcs,
-    #     bounds=(alpha_lb, alpha_ub),
-    #     solver_parameters=parameters.get("solvers"),
-    # )
+    with XDMFFile(
+        comm, f"{prefix}/{nameExp}.xdmf", "w", encoding=XDMFFile.Encoding.HDF5
+    ) as file:
+        file.write_mesh(mesh)
 
-    # bifurcation = BifurcationSolver(
-    #     total_energy, state, bcs, bifurcation_parameters=parameters.get("stability")
-    # )
+    V_u, V_alpha = create_function_spaces_nd(mesh, dim=2)
+    u, u_, alpha, β, v, state = initialise_functions(V_u, V_alpha)
 
-    # stability = StabilitySolver(
-    #     total_energy, state, bcs, cone_parameters=parameters.get("stability")
-    # )
+    # Bounds
+    alpha_ub = dolfinx.fem.Function(V_alpha, name="UpperBoundDamage")
+    alpha_lb = dolfinx.fem.Function(V_alpha, name="LowerBoundDamage")
+    t = dolfinx.fem.Constant(mesh, np.array(0.0, dtype=PETSc.ScalarType))
+    top_disp = dolfinx.fem.Constant(mesh, np.array([0.0, t], dtype=PETSc.ScalarType))
+    bottom_disp = dolfinx.fem.Constant(
+        mesh, np.array([0.0, 0.0], dtype=PETSc.ScalarType)
+    )
+    # Define the state
+    u_zero = Function(V_u, name="BoundaryDatum")
+    u_zero.interpolate(lambda x: [np.zeros_like(x[0]), np.zeros_like(x[1])])
 
-    # linesearch = LineSearch(
-    #     total_energy,
-    #     state,
-    #     linesearch_parameters=parameters.get("stability").get("linesearch"),
-    # )
+    for f in [u, u_zero, alpha_lb, alpha_ub]:
+        f.x.petsc_vec.ghostUpdate(
+            addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
+        )
+    # Bcs
 
+    # Locate top and bottom boundaries
+    def top_boundary(x):
+        return np.isclose(x[1], geom_params["R_outer"], atol=1e-3)
+
+    def bottom_boundary(x):
+        return np.isclose(x[1], -geom_params["R_outer"], atol=1e-3)
+
+    top_dofs = locate_dofs_topological(
+        V_u,
+        mesh.topology.dim - 1,
+        dolfinx.mesh.locate_entities_boundary(mesh, 1, top_boundary),
+    )
+    bottom_dofs = locate_dofs_topological(
+        V_u,
+        mesh.topology.dim - 1,
+        dolfinx.mesh.locate_entities_boundary(mesh, 1, bottom_boundary),
+    )
+    bcs_u = [
+        dirichletbc(top_disp, top_dofs, V_u),
+        dirichletbc(bottom_disp, bottom_dofs, V_u),
+    ]
+    bcs_alpha = []
+
+    bcs = {"bcs_u": bcs_u, "bcs_alpha": bcs_alpha}
+
+    model = models.DeviatoricSplit(parameters["model"])
+    total_energy = model.total_energy_density(state) * dx
+
+    load_par = parameters["loading"]
+    loads = np.linspace(load_par["min"], load_par["max"], load_par["steps"])
+
+    equilibrium = HybridSolver(
+        total_energy,
+        state,
+        bcs,
+        bounds=(alpha_lb, alpha_ub),
+        solver_parameters=parameters.get("solvers"),
+    )
+
+    bifurcation = BifurcationSolver(
+        total_energy, state, bcs, bifurcation_parameters=parameters.get("stability")
+    )
+
+    stability = StabilitySolver(
+        total_energy, state, bcs, cone_parameters=parameters.get("stability")
+    )
+
+    linesearch = LineSearch(
+        total_energy,
+        state,
+        linesearch_parameters=parameters.get("stability").get("linesearch"),
+    )
     # iterator = StabilityStepper(loads)
     # while True:
     #     try:
