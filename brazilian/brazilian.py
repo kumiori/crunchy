@@ -7,6 +7,7 @@ from irrevolutions.utils import (
     ColorPrint,
 )
 from dolfinx.common import list_timings
+from matplotlib import cm
 
 # from irrevolutions.models import default_model_parameters
 from dolfinx.io import XDMFFile, gmshio
@@ -135,7 +136,8 @@ def postprocess(
         stress_tensor = model.stress(model.eps(u), alpha)
 
         sigma_hydrostatic, sigma_deviatoric = split_stress(stress_tensor)
-        tr_minus, tr_plus = positive_negative_trace(model.eps(u))
+        tr_plus, tr_minus = positive_negative_trace(model.eps(u))
+        tr_strain = ufl.tr(model.eps(u))
 
         dtype = PETSc.ScalarType
 
@@ -159,6 +161,7 @@ def postprocess(
         strain_negative = dolfinx.fem.Function(
             scalar_space, name="StrainNegativeVolumetric"
         )
+        trace_strain = dolfinx.fem.Function(scalar_space, name="TraceStrain")
 
         # Interpolate computed quantities
         stress_deviatoric.interpolate(
@@ -185,6 +188,11 @@ def postprocess(
                 tr_minus, scalar_space.element.interpolation_points(), dtype=dtype
             )
         )
+        trace_strain.interpolate(
+            dolfinx.fem.Expression(
+                tr_strain, scalar_space.element.interpolation_points(), dtype=dtype
+            )
+        )
 
         with dolfinx.common.Timer("~Visualisation") as timer:
             fig, ax = plot_energies(history_data, _storage)
@@ -196,7 +204,10 @@ def postprocess(
             # topology, cell_types, geometry = create_vtk_mesh(mesh, mesh.topology.dim)
             grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)
             num_cells = len(grid.celltypes)  # This should match DG0 function size
-
+            cmap_positive = cm.get_cmap("coolwarm").copy()
+            cmap_negative = cm.get_cmap("coolwarm").copy()
+            grid_positive = grid.copy()
+            grid_negative = grid.copy()
             # Add computed stress components to the grid
             grid.cell_data["Deviatoric Stress"] = stress_deviatoric.x.array.real[
                 :num_cells
@@ -204,8 +215,16 @@ def postprocess(
             grid.cell_data["Hydrostatic Stress"] = stress_hydrostatic.x.array.real[
                 :num_cells
             ]
-            grid.cell_data["Positive Strain"] = strain_positive.x.array.real[:num_cells]
-            grid.cell_data["Negative Strain"] = strain_negative.x.array.real[:num_cells]
+            grid_positive.cell_data["Positive Strain"] = strain_positive.x.array.real[
+                :num_cells
+            ]
+            grid_negative.cell_data["Negative Strain"] = strain_negative.x.array.real[
+                :num_cells
+            ]
+            grid.cell_data["Trace Strain"] = trace_strain.x.array.real[:num_cells]
+
+            grid.compute_cell_sizes(length=False, volume=False)
+            grid_point = grid.cell_data_to_point_data()
 
             # Create PyVista plotter
             plotter = pyvista.Plotter(shape=(2, 2))
@@ -224,13 +243,31 @@ def postprocess(
             plotter.add_text("Hydrostatic Stress")
             plotter.view_xy()
 
+            contours = grid_point.contour([0], scalars="Trace Strain")
             plotter.subplot(1, 0)
-            plotter.add_mesh(grid, scalars="Positive Strain", cmap=colormap)
+            vmin = min(grid_negative.cell_data["Negative Strain"])
+            vmax = max(grid_positive.cell_data["Positive Strain"])
+            plotter.add_mesh(
+                grid_positive,
+                scalars="Positive Strain",
+                cmap=cmap_positive,
+                clim=(0, vmax),
+            )
+            if len(contours.points) > 0:
+                plotter.add_mesh(contours, color="white", line_width=3)
+
             plotter.add_text("Positive Volumetric Strain")
             plotter.view_xy()
 
             plotter.subplot(1, 1)
-            plotter.add_mesh(grid, scalars="Negative Strain", cmap=colormap)
+            plotter.add_mesh(
+                grid_negative,
+                scalars="Negative Strain",
+                cmap=cmap_negative,
+                clim=(vmin, 0),
+            )
+            if len(contours.points) > 0:
+                plotter.add_mesh(contours, color="white", line_width=3)
             plotter.add_text("Negative Volumetric Strain")
             plotter.view_xy()
 
@@ -486,7 +523,7 @@ def load_parameters(file_path):
     # parameters["model"]["at_number"] = 1
     parameters["loading"]["min"] = 0.0
     parameters["loading"]["max"] = 0.1
-    parameters["loading"]["steps"] = 10
+    parameters["loading"]["steps"] = 3
 
     parameters["geometry"]["geom_type"] = "circle"
     parameters["geometry"]["mesh_size_factor"] = 3
