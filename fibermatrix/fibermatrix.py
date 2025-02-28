@@ -9,12 +9,15 @@ from irrevolutions.utils import (
 from dolfinx.common import list_timings
 from matplotlib import cm
 
+import gc
+
 # from irrevolutions.models import default_model_parameters
 from dolfinx.io import XDMFFile, gmshio
 import irrevolutions.models as models
 from irrevolutions.algorithms.am import HybridSolver
 from irrevolutions.algorithms.so import BifurcationSolver, StabilitySolver
 from irrevolutions.algorithms.ls import StabilityStepper, LineSearch
+from matplotlib import colormaps
 
 # from irrevolutions.meshes.boolean import create_disk_with_hole
 from crunchy.mesh import mesh_matrix_fiber_reinforced
@@ -207,109 +210,122 @@ def postprocess(
             fig.savefig(f"{_storage}/energies.png")
             plt.close(fig)
 
-            pyvista.OFF_SCREEN = True
-            topology, cell_types, geometry = compute_topology(mesh, mesh.topology.dim)
-            # topology, cell_types, geometry = create_vtk_mesh(mesh, mesh.topology.dim)
-            grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)
-            num_cells = len(grid.celltypes)  # This should match DG0 function size
-            cmap_positive = cm.get_cmap("coolwarm").copy()
-            cmap_negative = cm.get_cmap("coolwarm").copy()
-            grid_positive = grid.copy()
-            grid_negative = grid.copy()
-            # Add computed stress components to the grid
-            grid.cell_data["Deviatoric Stress"] = stress_deviatoric.x.array.real[
-                :num_cells
-            ]
-            grid.cell_data["Hydrostatic Stress"] = stress_hydrostatic.x.array.real[
-                :num_cells
-            ]
-            grid_positive.cell_data["Positive Strain"] = strain_positive.x.array.real[
-                :num_cells
-            ]
-            grid_negative.cell_data["Negative Strain"] = strain_negative.x.array.real[
-                :num_cells
-            ]
-            grid.cell_data["Trace Strain"] = trace_strain.x.array.real[:num_cells]
-
-            grid.compute_cell_sizes(length=False, volume=False)
-            grid_point = grid.cell_data_to_point_data()
-
-            # Create PyVista plotter
-            plotter = pyvista.Plotter(shape=(2, 2))
-
-            # Define common colormap
-            colormap = "coolwarm"
-
-            # Plot each component
-            plotter.subplot(0, 0)
-            plotter.add_mesh(grid, scalars="Deviatoric Stress", cmap=colormap)
-            plotter.add_text("Deviatoric Stress")
-            plotter.view_xy()
-
-            plotter.subplot(0, 1)
-            plotter.add_mesh(grid, scalars="Hydrostatic Stress", cmap=colormap)
-            plotter.add_text("Hydrostatic Stress")
-            plotter.view_xy()
-
-            contours = grid_point.contour([0], scalars="Trace Strain")
-            plotter.subplot(1, 0)
-            vmin = min(grid_negative.cell_data["Negative Strain"])
-            vmax = max(grid_positive.cell_data["Positive Strain"])
-            plotter.add_mesh(
-                grid_positive,
-                scalars="Positive Strain",
-                cmap=cmap_positive,
-                clim=(0, vmax),
-            )
-            if len(contours.points) > 0:
-                plotter.add_mesh(contours, color="white", line_width=3)
-
-            plotter.add_text("Positive Volumetric Strain")
-            plotter.view_xy()
-
-            plotter.subplot(1, 1)
-            plotter.add_mesh(
-                grid_negative,
-                scalars="Negative Strain",
-                cmap=cmap_negative,
-                clim=(vmin, 0),
-            )
-            if len(contours.points) > 0:
-                plotter.add_mesh(contours, color="white", line_width=3)
-            plotter.add_text("Negative Volumetric Strain")
-            plotter.view_xy()
-
-            plotter.screenshot(f"{_storage}/stess_state_t{i_t:03}.png")
-
-            plotter = pyvista.Plotter(
-                title="State Evolution",
-                window_size=[1600, 600],
-                shape=(1, 2),
-            )
-
-            # Plot alpha
-            _plt, grid = plot_scalar(
-                alpha,
-                plotter,
-                subplot=(0, 0),
-                lineproperties={"cmap": "gray_r", "clim": (0.0, 1.0)},
-            )
-
-            # Add boundary lines
-            boundary_edges = grid.extract_feature_edges(
-                boundary_edges=True, feature_edges=False
-            )
-
-            # Plot displacement
-            _plt, grid = plot_vector(u, plotter, subplot=(0, 1))
-            _plt.screenshot(f"{_storage}/state_t{i_t:03}.png")
-
             try:
                 fig, ax = plot_spectrum(history_data)
                 fig.savefig(f"{_storage}/spectrum.png")
                 plt.close(fig)
             except Exception as e:
                 _logger.error(f"Error plotting spectrum: {e}")
+
+        # only do this every 10 steps
+        if i_t % 10 == 0:
+            with dolfinx.common.Timer("~Visualisation") as timer:
+                pyvista.OFF_SCREEN = True
+
+                topology, cell_types, geometry = compute_topology(
+                    mesh, mesh.topology.dim
+                )
+                # topology, cell_types, geometry = create_vtk_mesh(mesh, mesh.topology.dim)
+                grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)
+                num_cells = len(grid.celltypes)  # This should match DG0 function size
+                cmap_positive = colormaps["coolwarm"].copy()
+                cmap_negative = colormaps["coolwarm"].copy()
+                grid_positive = grid.copy()
+                grid_negative = grid.copy()
+                # Add computed stress components to the grid
+                grid.cell_data["Deviatoric Stress"] = stress_deviatoric.x.array.real[
+                    :num_cells
+                ]
+                grid.cell_data["Hydrostatic Stress"] = stress_hydrostatic.x.array.real[
+                    :num_cells
+                ]
+                grid_positive.cell_data["Positive Strain"] = (
+                    strain_positive.x.array.real[:num_cells]
+                )
+                grid_negative.cell_data["Negative Strain"] = (
+                    strain_negative.x.array.real[:num_cells]
+                )
+                grid.cell_data["Trace Strain"] = trace_strain.x.array.real[:num_cells]
+
+                grid.compute_cell_sizes(length=False, volume=False)
+                grid_point = grid.cell_data_to_point_data()
+
+                # Create PyVista plotter
+                plotter = pyvista.Plotter(shape=(2, 2))
+
+                # Define common colormap
+                colormap = "coolwarm"
+
+                # Plot each component
+                plotter.subplot(0, 0)
+                plotter.add_mesh(grid, scalars="Deviatoric Stress", cmap=colormap)
+                plotter.add_text("Deviatoric Stress")
+                plotter.view_xy()
+
+                plotter.subplot(0, 1)
+                plotter.add_mesh(grid, scalars="Hydrostatic Stress", cmap=colormap)
+                plotter.add_text("Hydrostatic Stress")
+                plotter.view_xy()
+
+                contours = grid_point.contour([0], scalars="Trace Strain")
+                plotter.subplot(1, 0)
+                vmin = min(grid_negative.cell_data["Negative Strain"])
+                vmax = max(grid_positive.cell_data["Positive Strain"])
+                plotter.add_mesh(
+                    grid_positive,
+                    scalars="Positive Strain",
+                    cmap=cmap_positive,
+                    clim=(0, vmax),
+                )
+                if len(contours.points) > 0:
+                    plotter.add_mesh(contours, color="white", line_width=3)
+
+                plotter.add_text("Positive Volumetric Strain")
+                plotter.view_xy()
+
+                plotter.subplot(1, 1)
+                plotter.add_mesh(
+                    grid_negative,
+                    scalars="Negative Strain",
+                    cmap=cmap_negative,
+                    clim=(vmin, 0),
+                )
+                if len(contours.points) > 0:
+                    plotter.add_mesh(contours, color="white", line_width=3)
+                plotter.add_text("Negative Volumetric Strain")
+                plotter.view_xy()
+
+                plotter.screenshot(f"{_storage}/stess_state_t{i_t:03}.png")
+                plotter.close()
+
+                del plotter, grid, grid_positive, grid_negative
+
+                plotter = pyvista.Plotter(
+                    title="State Evolution",
+                    window_size=[1600, 600],
+                    shape=(1, 2),
+                )
+
+                # Plot alpha
+                _plt, grid = plot_scalar(
+                    alpha,
+                    plotter,
+                    subplot=(0, 0),
+                    lineproperties={"cmap": "gray_r", "clim": (0.0, 1.0)},
+                )
+
+                # Add boundary lines
+                boundary_edges = grid.extract_feature_edges(
+                    boundary_edges=True, feature_edges=False
+                )
+
+                # Plot displacement
+                _plt, grid = plot_vector(u, plotter, subplot=(0, 1))
+                _plt.screenshot(f"{_storage}/state_t{i_t:03}.png")
+                _plt.close()
+
+                del plotter, grid
+                gc.collect()
     return fracture_energy, elastic_energy
 
 
@@ -529,8 +545,8 @@ def load_parameters(file_path):
 
     # parameters["model"]["at_number"] = 1
     parameters["loading"]["min"] = 0.0
-    parameters["loading"]["max"] = 1.0
-    parameters["loading"]["steps"] = 10
+    parameters["loading"]["max"] = 1
+    parameters["loading"]["steps"] = 100
 
     parameters["geometry"]["geom_type"] = "circle"
     parameters["geometry"]["mesh_size_factor"] = 3

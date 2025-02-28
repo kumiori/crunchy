@@ -133,6 +133,11 @@ def postprocess(
 
         alpha, u = state["alpha"], state["u"]
         mesh = alpha.function_space.mesh
+        with XDMFFile(
+            comm, f"{prefix}/{_nameExp}.xdmf", "a", encoding=XDMFFile.Encoding.HDF5
+        ) as file:
+            file.write_function(u, t)
+            file.write_function(alpha, t)
 
         stress_tensor = model.stress(model.eps(u), alpha)
 
@@ -292,9 +297,6 @@ def postprocess(
             boundary_edges = grid.extract_feature_edges(
                 boundary_edges=True, feature_edges=False
             )
-            _plt.add_mesh(
-                boundary_edges, style="wireframe", color="black", line_width=3.0
-            )
 
             # Plot displacement
             _plt, grid = plot_vector(u, plotter, subplot=(0, 1))
@@ -359,10 +361,10 @@ def run_computation(parameters, storage):
     # Bcs
     # Locate top and bottom boundaries
     def top_boundary(x):
-        return np.isclose(x[1], geom_params["R_outer"], atol=1e-3)
+        return np.isclose(x[1], geom_params["R_outer"], atol=1e-2)
 
     def bottom_boundary(x):
-        return np.isclose(x[1], -geom_params["R_outer"], atol=1e-3)
+        return np.isclose(x[1], -geom_params["R_outer"], atol=1e-2)
 
     boundaries = [(1, top_boundary), (2, bottom_boundary)]
 
@@ -408,7 +410,8 @@ def run_computation(parameters, storage):
 
     bcs = {"bcs_u": bcs_u, "bcs_alpha": bcs_alpha}
 
-    model = models.DeviatoricSplit(parameters["model"])
+    # model = models.DeviatoricSplit(parameters["model"])
+    model = models.PositiveNegativeSplit(parameters["model"])
     total_energy = model.total_energy_density(state) * dx
 
     load_par = parameters["loading"]
@@ -523,8 +526,8 @@ def load_parameters(file_path):
 
     # parameters["model"]["at_number"] = 1
     parameters["loading"]["min"] = 0.0
-    parameters["loading"]["max"] = 0.1
-    parameters["loading"]["steps"] = 3
+    parameters["loading"]["max"] = 1.0
+    parameters["loading"]["steps"] = 10
 
     parameters["geometry"]["geom_type"] = "circle"
     parameters["geometry"]["mesh_size_factor"] = 3
@@ -540,8 +543,7 @@ def load_parameters(file_path):
 
     parameters["model"]["w1"] = 1
     parameters["model"]["k_res"] = 0.0
-    parameters["model"]["mu"] = 1
-    parameters["model"]["ell"] = 0.02
+    parameters["model"]["ell"] = 0.1
     parameters["solvers"]["damage_elasticity"]["max_it"] = 1000
 
     parameters["solvers"]["damage_elasticity"]["alpha_rtol"] = 1e-3

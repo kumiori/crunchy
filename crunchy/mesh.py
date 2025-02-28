@@ -60,7 +60,9 @@ def validate_holes(holes, R):
     for i, (x1, y1, r1) in enumerate(holes):
         # Check that the hole does not touch the boundary of the circle
         if math.sqrt(x1**2 + y1**2) + r1 > R:
-            print(f"Error: Hole at ({x1}, {y1}) with radius {r1} touches the boundary.")
+            print(
+                f"Warning: Hole at ({x1:.2f}, {y1:.2f}) with radius {r1:.2f} touches the boundary. Retrying..."
+            )
             return False
 
         # Check for intersections with other holes
@@ -69,8 +71,8 @@ def validate_holes(holes, R):
                 distance = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
                 if distance < r1 + r2:  # Holes overlap
                     print(
-                        f"Error: Hole at ({x1}, {y1}) with radius {r1} intersects "
-                        f"with hole at ({x2}, {y2}) with radius {r2}."
+                        f"Warning: Hole at ({x1:.2f}, {y1:.2f}) with radius {r1:.2f} intersects "
+                        f"with hole at ({x2:.2f}, {y2:.2f}) with radius {r2:.2f}. Retrying..."
                     )
                     return False
 
@@ -128,7 +130,9 @@ def mesh_circle_with_holes_gmshapi(
 
         # Add holes to the model
         hole_loops = []
-        for (hx, hy), hr in zip(hole_positions, hole_radius):
+        hole_tags = []
+
+        for i, ((hx, hy), hr) in enumerate(zip(hole_positions, hole_radius)):
             h0 = model.geo.addPoint(hx, hy, 0, lc * refinement_factor)
             h1 = model.geo.addPoint(hx + hr, hy, 0, lc * refinement_factor)
             h2 = model.geo.addPoint(hx, hy + hr, 0, lc * refinement_factor)
@@ -141,16 +145,30 @@ def mesh_circle_with_holes_gmshapi(
             hole_loop = model.geo.addCurveLoop([hc1, hc2, hc3, hc4])
             hole_loops.append(hole_loop)
 
+            hole_boundary_tag = model.addPhysicalGroup(
+                1, [hc1, hc2, hc3, hc4], tag=i + 10
+            )
+            hole_tags.append(hole_boundary_tag)
+            model.setPhysicalName(1, hole_boundary_tag, f"Hole {i}")
+
         # Define the surface with holes
         plane_surface = model.geo.addPlaneSurface([outer_circle] + hole_loops)
 
         # Synchronize and generate mesh
         model.geo.synchronize()
+        assert len(model.getEntities(2)) > 0, "No 2D entities found."
+
         surface_entities = [model[1] for model in model.getEntities(tdim)]
-        model.addPhysicalGroup(tdim, surface_entities, tag=5)
-        model.setPhysicalName(tdim, 5, "Film surface")
+        model.addPhysicalGroup(tdim, surface_entities, tag=666)
+        model.setPhysicalName(tdim, 666, "Film surface")
+
+        for dim in range(4):  # Loop over dimensions 0 (points) to 3 (volumes)
+            entities = gmsh.model.getEntities(dim)
+            print(f"Entities of dimension {dim}: {entities}")
 
         gmsh.model.mesh.setOrder(order)
+        gmsh.option.setNumber("Mesh.Optimize", 2)
+        gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
         model.mesh.generate(tdim)
 
         # Optional: Write msh file
@@ -258,4 +276,73 @@ def mesh_circle_with_holes_gmshapi_old(
 
         gmsh.finalize()
 
+    return gmsh.model if comm.rank == 0 else None, tdim
+
+
+def mesh_matrix_fiber_reinforced(comm, geom_parameters):
+    """
+    Generate a square domain with a circular hole using Gmsh.
+
+    Parameters:
+        geom_parameters: dict
+            Dictionary containing geometric parameters:
+            - "L"  : Length of the square domain
+            - "R"  : Radius of the circular hole
+        lc: float
+            Characteristic length for meshing.
+    """
+    gmsh.initialize()
+    gmsh.model.add("Square_with_Hole")
+
+    # Geometric parameters
+    L = geom_parameters["L"]
+    R = geom_parameters["R_inner"]
+    lc = geom_parameters["lc"]
+    tdim = geom_parameters["geometric_dimension"]
+    # Use the Open Cascade Kernel (OCC)
+    rect = gmsh.model.occ.addRectangle(-L / 2, -L / 2, 0, L, L, tag=1)  # Square
+    hole = gmsh.model.occ.addDisk(0, 0, 0, R, R, tag=2)  # Circular hole
+    # Boolean cut: Subtract the hole from the rectangle
+    domain_with_hole = gmsh.model.occ.cut([(2, rect)], [(2, hole)])
+    gmsh.model.occ.synchronize()  # Sync CAD with GMSH
+    domain_surfaces = domain_with_hole[0]  # Extract the remaining surface entity
+
+    hole_boundary = gmsh.model.getBoundary(domain_surfaces, oriented=False)
+    # Assign a uniform mesh size to all surfaces
+    gmsh.model.mesh.setSize(gmsh.model.getEntities(0), lc)
+
+    # Define physical groups for boundary conditions
+    domain_tag = gmsh.model.addPhysicalGroup(
+        2, [domain_with_hole[0][0][1]], name="Domain"
+    )
+    gmsh.model.setPhysicalName(2, domain_tag, "Domain")
+    hole_edges = [edge[1] for edge in hole_boundary]  # Extract edge IDs
+    hole_tag = gmsh.model.addPhysicalGroup(1, hole_edges)
+    gmsh.model.setPhysicalName(1, hole_tag, "Hole_Boundary")
+    outer_boundary = gmsh.model.getBoundary([(2, rect)], oriented=False)
+
+    top_edges = []
+    bottom_edges = []
+    for edge in outer_boundary:
+        edge_id = edge[1]  # Get the tag of the edge
+        com = gmsh.model.occ.getCenterOfMass(1, edge_id)  # Get edge centroid
+        y_com = com[1]  # Extract Y coordinate
+        if abs(y_com - (L / 2)) < 1e-6:  # Top boundary
+            top_edges.append(edge_id)
+        elif abs(y_com + (L / 2)) < 1e-6:  # Bottom boundary
+            bottom_edges.append(edge_id)
+
+    top_tag = gmsh.model.addPhysicalGroup(1, top_edges)
+    gmsh.model.setPhysicalName(1, top_tag, "Top_Boundary")
+    bottom_tag = gmsh.model.addPhysicalGroup(1, bottom_edges)
+    gmsh.model.setPhysicalName(1, bottom_tag, "Bottom_Boundary")
+
+    # Generate and save the mesh
+    gmsh.model.mesh.generate(tdim)
+
+    # Save mesh to MSH file
+    msh_filename = "square_with_hole.msh"
+    gmsh.write(msh_filename)
+
+    # Finalize Gmsh
     return gmsh.model if comm.rank == 0 else None, tdim
