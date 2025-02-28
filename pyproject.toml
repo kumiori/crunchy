@@ -21,5 +21,9 @@ dependencies = [
 ]
 requires-python = ">=3.8"
 readme = "README.md"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.envs.default.scripts]
 update-irrev = 'pip install  --force-reinstall --no-deps --ignore-installed --no-cache-dir -U "irrevolutions @ git+https://github.com/kumiori/irrevolutions.git"'
