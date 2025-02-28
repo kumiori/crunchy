@@ -24,6 +24,7 @@ from irrevolutions.utils.viz import plot_scalar, plot_vector
 import matplotlib.pyplot as plt
 import pyvista
 import ufl
+from dolfinx.plot import vtk_mesh as compute_topology
 
 # from irrevolutions.meshes.primitives import mesh_bar_gmshapi
 from irrevolutions.utils import _logger, setup_logger_mpi, history_data
@@ -55,6 +56,37 @@ import hashlib
 
 comm = MPI.COMM_WORLD
 model_rank = 0
+
+
+def split_stress(stress_tensor):
+    """
+    Split stress tensor into hydrostatic and deviatoric components.
+
+    Parameters:
+    stress_tensor (ufl.Expr): The stress tensor to split.
+
+    Returns:
+    tuple: hydrostatic and deviatoric stress tensors.
+    """
+    # Identity tensor
+    I = ufl.Identity(len(stress_tensor.ufl_shape))
+
+    # Compute hydrostatic stress
+    sigma_hydrostatic = ufl.tr(stress_tensor) / len(stress_tensor.ufl_shape)
+    # Compute deviatoric stress
+    sigma_deviatoric = stress_tensor - sigma_hydrostatic * I
+
+    return sigma_hydrostatic, sigma_deviatoric
+
+
+def positive_negative_trace(eps):
+    """
+    Compute the positive and negative parts of the trace of the strain tensor.
+    """
+    tr_eps = ufl.tr(eps)
+    tr_plus = ufl.max_value(tr_eps, 0)
+    tr_minus = ufl.min_value(tr_eps, 0)
+    return tr_plus, tr_minus
 
 
 def postprocess(
@@ -98,6 +130,61 @@ def postprocess(
         )
 
         alpha, u = state["alpha"], state["u"]
+        mesh = alpha.function_space.mesh
+
+        stress_tensor = model.stress(model.eps(u), alpha)
+
+        sigma_hydrostatic, sigma_deviatoric = split_stress(stress_tensor)
+        tr_minus, tr_plus = positive_negative_trace(model.eps(u))
+
+        dtype = PETSc.ScalarType
+
+        # Create function spaces for scalar and vector quantities
+        scalar_space = dolfinx.fem.functionspace(mesh, ("Discontinuous Lagrange", 0))
+        vector_space = dolfinx.fem.functionspace(
+            mesh, ("Discontinuous Lagrange", 0, (2,))
+        )
+        tensor_space = dolfinx.fem.functionspace(
+            mesh, ("Discontinuous Lagrange", 0, (2, 2))
+        )
+
+        # Create functions for storage
+        stress_deviatoric = dolfinx.fem.Function(tensor_space, name="DeviatoricStress")
+        stress_hydrostatic = dolfinx.fem.Function(
+            scalar_space, name="HydrostaticStress"
+        )
+        strain_positive = dolfinx.fem.Function(
+            scalar_space, name="StrainPositiveVolumetric"
+        )
+        strain_negative = dolfinx.fem.Function(
+            scalar_space, name="StrainNegativeVolumetric"
+        )
+
+        # Interpolate computed quantities
+        stress_deviatoric.interpolate(
+            dolfinx.fem.Expression(
+                sigma_deviatoric,
+                vector_space.element.interpolation_points(),
+                dtype=dtype,
+            )
+        )
+        stress_hydrostatic.interpolate(
+            dolfinx.fem.Expression(
+                sigma_hydrostatic,
+                scalar_space.element.interpolation_points(),
+                dtype=dtype,
+            )
+        )
+        strain_positive.interpolate(
+            dolfinx.fem.Expression(
+                tr_plus, scalar_space.element.interpolation_points(), dtype=dtype
+            )
+        )
+        strain_negative.interpolate(
+            dolfinx.fem.Expression(
+                tr_minus, scalar_space.element.interpolation_points(), dtype=dtype
+            )
+        )
 
         with dolfinx.common.Timer("~Visualisation") as timer:
             fig, ax = plot_energies(history_data, _storage)
@@ -105,6 +192,50 @@ def postprocess(
             plt.close(fig)
 
             pyvista.OFF_SCREEN = True
+            topology, cell_types, geometry = compute_topology(mesh, mesh.topology.dim)
+            # topology, cell_types, geometry = create_vtk_mesh(mesh, mesh.topology.dim)
+            grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)
+            num_cells = len(grid.celltypes)  # This should match DG0 function size
+
+            # Add computed stress components to the grid
+            grid.cell_data["Deviatoric Stress"] = stress_deviatoric.x.array.real[
+                :num_cells
+            ]
+            grid.cell_data["Hydrostatic Stress"] = stress_hydrostatic.x.array.real[
+                :num_cells
+            ]
+            grid.cell_data["Positive Strain"] = strain_positive.x.array.real[:num_cells]
+            grid.cell_data["Negative Strain"] = strain_negative.x.array.real[:num_cells]
+
+            # Create PyVista plotter
+            plotter = pyvista.Plotter(shape=(2, 2))
+
+            # Define common colormap
+            colormap = "coolwarm"
+
+            # Plot each component
+            plotter.subplot(0, 0)
+            plotter.add_mesh(grid, scalars="Deviatoric Stress", cmap=colormap)
+            plotter.add_text("Deviatoric Stress")
+            plotter.view_xy()
+
+            plotter.subplot(0, 1)
+            plotter.add_mesh(grid, scalars="Hydrostatic Stress", cmap=colormap)
+            plotter.add_text("Hydrostatic Stress")
+            plotter.view_xy()
+
+            plotter.subplot(1, 0)
+            plotter.add_mesh(grid, scalars="Positive Strain", cmap=colormap)
+            plotter.add_text("Positive Volumetric Strain")
+            plotter.view_xy()
+
+            plotter.subplot(1, 1)
+            plotter.add_mesh(grid, scalars="Negative Strain", cmap=colormap)
+            plotter.add_text("Negative Volumetric Strain")
+            plotter.view_xy()
+
+            plotter.screenshot(f"{_storage}/stess_state_t{i_t:03}.png")
+
             plotter = pyvista.Plotter(
                 title="State Evolution",
                 window_size=[1600, 600],
@@ -273,7 +404,7 @@ def run_computation(parameters, storage):
         # top_disp = dolfinx.fem.Constant(mesh, np.array([0.0, -t.value]))
         top_disp.interpolate(
             lambda x: np.stack(
-                [np.zeros_like(x[0]), np.full_like(x[0], t.value)], axis=0
+                [np.zeros_like(x[0]), np.full_like(x[0], -t.value)], axis=0
             )
         )
         #     u_zero.interpolate(lambda x: radial_field(x) * eps_t)
@@ -354,7 +485,7 @@ def load_parameters(file_path):
 
     # parameters["model"]["at_number"] = 1
     parameters["loading"]["min"] = 0.0
-    parameters["loading"]["max"] = 3
+    parameters["loading"]["max"] = 0.1
     parameters["loading"]["steps"] = 10
 
     parameters["geometry"]["geom_type"] = "circle"
