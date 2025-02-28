@@ -21,6 +21,7 @@ from irrevolutions.utils.plots import (
     plot_energies,
     plot_force_displacement,
 )
+from crunchy.plots import plot_spectrum
 from irrevolutions.utils.viz import plot_scalar, plot_vector
 import matplotlib.pyplot as plt
 import pyvista
@@ -299,6 +300,12 @@ def postprocess(
             _plt, grid = plot_vector(u, plotter, subplot=(0, 1))
             _plt.screenshot(f"{_storage}/state_t{i_t:03}.png")
 
+            try:
+                fig, ax = plot_spectrum(history_data)
+                fig.savefig(f"{_storage}/spectrum.png")
+                plt.close(fig)
+            except Exception as e:
+                _logger.error(f"Error plotting spectrum: {e}")
     return fracture_energy, elastic_energy
 
 
@@ -338,8 +345,6 @@ def run_computation(parameters, storage):
     alpha_ub = dolfinx.fem.Function(V_alpha, name="UpperBoundDamage")
     alpha_lb = dolfinx.fem.Function(V_alpha, name="LowerBoundDamage")
     t = dolfinx.fem.Constant(mesh, np.array(-0.1, dtype=PETSc.ScalarType))
-    # top_disp = dolfinx.fem.Constant(mesh, np.array([0.0, t], dtype=PETSc.ScalarType))
-    # top_disp = t * ufl.as_vector([0.0, 1.0])
     top_disp = dolfinx.fem.Function(V_u)
 
     bottom_disp = dolfinx.fem.Constant(
@@ -456,28 +461,24 @@ def run_computation(parameters, storage):
         with dolfinx.common.Timer(f"~First Order: Equilibrium") as timer:
             equilibrium.solve(alpha_lb)
 
-        #     _logger.critical(f"Bifurcation for t = {t:3.2f} --")
-        #     is_unique = bifurcation.solve(alpha_lb)
-        #     is_elastic = not bifurcation._is_critical(alpha_lb)
-        #     inertia = bifurcation.get_inertia()
+        _logger.critical(f"Bifurcation for t = {t.value:3.2f} --")
+        is_unique = bifurcation.solve(alpha_lb)
+        is_elastic = not bifurcation._is_critical(alpha_lb)
+        inertia = bifurcation.get_inertia()
 
-        #     z0 = (
-        #         bifurcation._spectrum[0]["xk"]
-        #         if bifurcation._spectrum and "xk" in bifurcation._spectrum[0]
-        #         else None
-        #     )
-        #     ColorPrint.print_bold(f"Evolution is unique: {is_unique}")
-        #     ColorPrint.print_bold(f"State's inertia: {inertia}")
-        #     # stable = stability.solve(alpha_lb, eig0=z0, inertia=inertia)
-        #     equilibrium.log()
-        #     bifurcation.log()
-        #     ColorPrint.print_bold(f"===================- {_storage} -=================")
+        z0 = (
+            bifurcation._spectrum[0]["xk"]
+            if bifurcation._spectrum and "xk" in bifurcation._spectrum[0]
+            else None
+        )
 
-        #     stable = stability.solve(alpha_lb, eig0=z0, inertia=inertia)
-
-        #     equilibrium.log()
-        #     bifurcation.log()
-        #     stability.log()
+        # ColorPrint.print_bold(f"Evolution is unique: {is_unique}")
+        # ColorPrint.print_bold(f"State's inertia: {inertia}")
+        stable = stability.solve(alpha_lb, eig0=z0, inertia=inertia)
+        # equilibrium.log()
+        bifurcation.log()
+        stability.log()
+        ColorPrint.print_bold(f"===================- {_storage} -=================")
 
         fracture_energy, elastic_energy = postprocess(
             parameters,
@@ -492,7 +493,7 @@ def run_computation(parameters, storage):
             equilibrium,
             bifurcation,
             stability,
-            inertia=(0, 0, 0),
+            inertia=inertia,
             i_t=i_t,
             model=model,
             history_data=history_data,
