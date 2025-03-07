@@ -15,7 +15,9 @@ import irrevolutions.models as models
 from irrevolutions.algorithms.am import HybridSolver, ContactAlternateMinimisation
 from irrevolutions.algorithms.so import BifurcationSolver, StabilitySolver
 from irrevolutions.algorithms.ls import StabilityStepper, LineSearch
-from irrevolutions.meshes.boolean import create_disk_with_hole
+
+# from irrevolutions.meshes.boolean import create_disk_with_hole
+from crunchy.mesh import mesh_disk_with_rhomboidal_hole as create_disk_with_hole
 from irrevolutions.utils.plots import (
     plot_AMit_load,
     plot_energies,
@@ -315,7 +317,9 @@ def run_computation(parameters, storage):
     nameExp = parameters["geometry"]["geom_type"]
     geom_params = {
         "R_outer": 1.0,  # Outer disk radius
-        "R_inner": 0.1,  # Inner hole radius (set to 0.0 for no hole)
+        # "R_inner": 0.1,  # Inner hole radius (set to 0.0 for no hole)
+        "axis": 0.05,  # Inner hole radius (set to 0.0 for no hole)
+        "angle": 5,  # Inner hole radius (set to 0.0 for no hole)
         "lc": 0.05,  # Mesh element size
         "a": 0.1,  # Half-width of the refined region (-a < x < a)
     }
@@ -332,9 +336,10 @@ def run_computation(parameters, storage):
     outdir = os.path.join(os.path.dirname(__file__), "output")
     prefix = setup_output_directory(storage, parameters, outdir)
 
-    parameters["model"]["ell"] = 0.5
-    parameters["model"]["E"] = 10
-    parameters["loading"]["max"] = 2
+    parameters["model"]["ell"] = 0.1
+    parameters["model"]["w1"] = 1.0
+    parameters["model"]["E"] = 1.0
+    parameters["loading"]["max"] = 1
 
     signature = hashlib.md5(str(parameters).encode("utf-8")).hexdigest()
     save_parameters(parameters, prefix)
@@ -355,6 +360,7 @@ def run_computation(parameters, storage):
 
     t = dolfinx.fem.Constant(mesh, np.array(-0.1, dtype=PETSc.ScalarType))
     top_disp = dolfinx.fem.Function(V_u)
+    # top_disp = dolfinx.fem.Constant(mesh, np.array([0.0, 0.0], dtype=PETSc.ScalarType))
 
     bottom_disp = dolfinx.fem.Constant(
         mesh, np.array([0.0, 0.0], dtype=PETSc.ScalarType)
@@ -380,8 +386,8 @@ def run_computation(parameters, storage):
 
     # Bcs
     # Locate top and bottom boundaries
-    # def top_boundary(x):
-    #     return np.isclose(x[1], geom_params["R_outer"], atol=1e-2)
+    def top_boundary(x):
+        return np.isclose(x[1], geom_params["R_outer"], atol=1e-2)
 
     def bottom_boundary(x):
         return np.isclose(x[1], -geom_params["R_outer"], atol=1e-2)
@@ -411,38 +417,41 @@ def run_computation(parameters, storage):
     #     xdmf.write_mesh(mesh)
     #     xdmf.write_meshtags(facet_tag, mesh.geometry)
 
-    # top_dofs = locate_dofs_topological(
-    #     V_u,
-    #     mesh.topology.dim - 1,
-    #     dolfinx.mesh.locate_entities_boundary(mesh, 1, top_boundary),
-    # )
     point_to_fix = np.array([0, -geom_params["R_outer"], 0.0])
     dofs_to_fix = dolfinx.fem.locate_dofs_geometrical(
         V_u,
         lambda x: np.linalg.norm(x.T - point_to_fix, axis=1) < 0.1 * geom_params["lc"],
     )
+
+    top_dofs = locate_dofs_topological(
+        V_u,
+        mesh.topology.dim - 1,
+        dolfinx.mesh.locate_entities_boundary(mesh, 1, top_boundary),
+    )
+
     bottom_dofs = locate_dofs_topological(
         V_u,
         mesh.topology.dim - 1,
         dolfinx.mesh.locate_entities_boundary(mesh, 1, bottom_boundary),
     )
+
     fixed_bc = dolfinx.fem.dirichletbc(
         dolfinx.fem.Constant(mesh, PETSc.ScalarType((0.0, 0.0))), dofs_to_fix, V_u
     )
 
     bcs_u = [
-        # dirichletbc(top_disp, top_dofs, V_u),
-        # dirichletbc(top_disp, top_dofs),
-        dirichletbc(bottom_disp, bottom_dofs, V_u),
-        # fixed_bc,
+        # dirichletbc(top_disp, top_dofs, V_u),     # if top disp is a constant
+        # dirichletbc(top_disp, top_dofs),  # if top disp is a function
+        # dirichletbc(bottom_disp, bottom_dofs, V_u),
+        fixed_bc,
     ]
     bcs_alpha = []
 
     bcs = {"bcs_u": bcs_u, "bcs_alpha": bcs_alpha}
 
     # model = models.DeviatoricSplit(parameters["model"])
-    model = models.DamageElasticityModel(parameters["model"])
-    # model = models.PositiveNegativeSplit(parameters["model"])
+    # model = models.DamageElasticityModel(parameters["model"])
+    model = models.PositiveNegativeSplit(parameters["model"])
     total_energy = model.total_energy_density(state) * dx
 
     load_par = parameters["loading"]
@@ -481,6 +490,7 @@ def run_computation(parameters, storage):
         bounds_alpha=(alpha_lb, alpha_ub),
         solver_parameters=parameters.get("solvers"),
     )
+
     bifurcation = BifurcationSolver(
         total_energy, state, bcs, bifurcation_parameters=parameters.get("stability")
     )
@@ -502,19 +512,19 @@ def run_computation(parameters, storage):
             break
 
         t.value = loads[i_t]
-        # top_disp = dolfinx.fem.Constant(mesh, np.array([0.0, -t.value]))
-        # top_disp.interpolate(
-        #     lambda x: np.stack(
-        #         [np.zeros_like(x[0]), np.full_like(x[0], -t.value)], axis=0
-        #     )
-        # )
+
+        top_disp.interpolate(
+            lambda x: np.stack(
+                [np.zeros_like(x[0]), np.full_like(x[0], t.value)], axis=0
+            )
+        )
         #     u_zero.interpolate(lambda x: radial_field(x) * eps_t)
         #     u_zero.vector.ghostUpdate(
         #         addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
         #     )
         u_ub.interpolate(
             lambda x: np.stack(
-                [np.full_like(x[0], np.inf), np.full_like(x[1], g - np.abs(t) - x[1])]
+                [np.full_like(x[0], np.inf), np.full_like(x[1], g - t - x[1])]
             )
         )
         alpha.x.petsc_vec.copy(alpha_lb.x.petsc_vec)
@@ -523,7 +533,7 @@ def run_computation(parameters, storage):
         )
         _logger.critical(f"-- Solving for i_t = {i_t} t = {t.value:3.2f} --")
         with dolfinx.common.Timer(f"~First Order: Equilibrium") as timer:
-            equilibrium.solve()
+            equilibrium.solve(alpha_lb)
 
         _logger.critical(f"Bifurcation for t = {t.value:3.2f} --")
         is_unique = bifurcation.solve(alpha_lb)
@@ -590,7 +600,7 @@ def load_parameters(file_path):
     parameters["loading"]["max"] = 1.0
     parameters["loading"]["steps"] = 10
 
-    parameters["geometry"]["geom_type"] = "circle"
+    parameters["geometry"]["geom_type"] = "brazilian_corners"
     parameters["geometry"]["mesh_size_factor"] = 3
     parameters["geometry"]["R_outer"] = 1.0  # Outer disk radius
     parameters["geometry"]["R_inner"] = 0.3  # Inner hole radius (0.0 for no hole)
@@ -605,6 +615,7 @@ def load_parameters(file_path):
     parameters["model"]["w1"] = 1
     parameters["model"]["k_res"] = 0.0
     parameters["model"]["ell"] = 0.1
+    parameters["model"]["nu"] = 0.3
     parameters["solvers"]["damage_elasticity"]["max_it"] = 1000
 
     parameters["solvers"]["damage_elasticity"]["alpha_rtol"] = 1e-3
@@ -624,7 +635,7 @@ if __name__ == "__main__":
     parameters, signature = load_parameters("parameters.yaml")
 
     # Run computation
-    _storage = f"./output/MPI-{MPI.COMM_WORLD.Get_size()}/{signature[0:6]}"
+    _storage = f"./output/{signature[0:6]}"
     visualization = Visualization(_storage)
 
     with dolfinx.common.Timer(f"~Computation Experiment") as timer:

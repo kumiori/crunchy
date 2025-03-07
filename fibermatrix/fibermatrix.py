@@ -218,7 +218,7 @@ def postprocess(
                 _logger.error(f"Error plotting spectrum: {e}")
 
         # only do this every 10 steps
-        if i_t % 10 == 0:
+        if i_t % 5 == 0:
             with dolfinx.common.Timer("~Visualisation") as timer:
                 pyvista.OFF_SCREEN = True
 
@@ -468,7 +468,7 @@ def run_computation(parameters, storage):
         # top_disp = dolfinx.fem.Constant(mesh, np.array([0.0, -t.value]))
         top_disp.interpolate(
             lambda x: np.stack(
-                [np.zeros_like(x[0]), np.full_like(x[0], t.value)], axis=0
+                [np.zeros_like(x[0]), np.full_like(x[0], -t.value)], axis=0
             )
         )
         #     u_zero.interpolate(lambda x: radial_field(x) * eps_t)
@@ -493,7 +493,6 @@ def run_computation(parameters, storage):
             if bifurcation._spectrum and "xk" in bifurcation._spectrum[0]
             else None
         )
-
         # ColorPrint.print_bold(f"Evolution is unique: {is_unique}")
         # ColorPrint.print_bold(f"State's inertia: {inertia}")
         stable = stability.solve(alpha_lb, eig0=z0, inertia=inertia)
@@ -548,11 +547,18 @@ def load_parameters(file_path):
     parameters["loading"]["max"] = 1
     parameters["loading"]["steps"] = 100
 
-    parameters["geometry"]["geom_type"] = "circle"
-    parameters["geometry"]["mesh_size_factor"] = 3
+    parameters["model"]["w1"] = 1
+    parameters["model"]["k_res"] = 0.0
+    parameters["model"]["ell"] = 0.05
+
+    parameters["geometry"]["geom_type"] = "fibermatrix"
+    parameters["geometry"]["mesh_size_factor"] = 2
     parameters["geometry"]["L"] = 1.0  # Outer disk radius
     parameters["geometry"]["R_inner"] = 0.1  # Inner hole radius (0.0 for no hole)
-    parameters["geometry"]["lc"] = 0.05  # Mesh element size
+    # parameters["geometry"]["lc"] = 0.05  # Mesh element size
+    parameters["geometry"]["lc"] = (
+        parameters["model"]["ell"] / parameters["geometry"]["mesh_size_factor"]
+    )
     parameters["geometry"]["a"] = 0.1  # Half-width of the refined region (-a < x < a)
 
     parameters["stability"]["cone"]["cone_max_it"] = 400000
@@ -560,14 +566,15 @@ def load_parameters(file_path):
     parameters["stability"]["cone"]["cone_rtol"] = 1e-6
     parameters["stability"]["cone"]["scaling"] = 1e-3
 
-    parameters["model"]["w1"] = 1
-    parameters["model"]["k_res"] = 0.0
-    parameters["model"]["ell"] = 0.1
-    parameters["solvers"]["damage_elasticity"]["max_it"] = 1000
+    parameters["solvers"]["elasticity"]["snes_monitor"] = None
+    parameters["solvers"]["damage"]["snes_monitor"] = None
 
+    parameters["solvers"]["damage_elasticity"]["max_it"] = 1000
     parameters["solvers"]["damage_elasticity"]["alpha_rtol"] = 1e-3
+
     parameters["solvers"]["newton"]["snes_atol"] = 1e-8
     parameters["solvers"]["newton"]["snes_rtol"] = 1e-8
+    parameters["solvers"]["newton"]["snes_monitor"] = None
 
     signature = hashlib.md5(str(parameters).encode("utf-8")).hexdigest()
 
@@ -582,7 +589,8 @@ if __name__ == "__main__":
     parameters, signature = load_parameters("parameters.yaml")
 
     # Run computation
-    _storage = f"./output/MPI-{MPI.COMM_WORLD.Get_size()}/{signature[0:6]}"
+    # _storage = f"./output/MPI-{MPI.COMM_WORLD.Get_size()}/{signature[0:6]}"
+    _storage = f"./output/{signature[0:6]}"
     visualization = Visualization(_storage)
 
     with dolfinx.common.Timer(f"~Computation Experiment") as timer:
