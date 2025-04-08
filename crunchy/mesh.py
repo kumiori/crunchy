@@ -1,5 +1,6 @@
 from dolfinx.mesh import create_rectangle
 from mpi4py import MPI
+from numpy import pi
 
 
 def create_2d_mesh(dimensions=(1, 1), resolution=(10, 10)):
@@ -346,3 +347,379 @@ def mesh_matrix_fiber_reinforced(comm, geom_parameters):
 
     # Finalize Gmsh
     return gmsh.model if comm.rank == 0 else None, tdim
+
+
+def mesh_disk_with_rhomboidal_hole(comm=MPI.COMM_WORLD, geom_parameters=None):
+    """
+    Creates a 2D disk with a rhomboidal hole using Gmsh.
+
+    Args:
+        comm (MPI.Comm): MPI communicator.
+        geom_parameters (dict): Dictionary containing geometric parameters:
+            - 'R_outer': Outer disk radius.
+            - 'angle': Angle of the rhomboid in degrees.
+            - 'axis': Axis length of the rhomboid.
+            - 'lc': Mesh element size.
+            - 'a': Half-width of the refined symmetric region (default 7 * lc).
+
+    Returns:
+        None (Gmsh model is created and can be meshed/exported).
+    """
+    if geom_parameters is None:
+        geom_parameters = {
+            "R_outer": 1.0,  # Outer disk radius
+            "angle": 45.0,  # Angle of the rhomboid in degrees
+            "axis": 0.5,  # Axis length of the rhomboid
+            "lc": 0.05,  # Mesh element size
+            "a": None,  # Half-width of the refined region (-a < x < a)
+        }
+
+    R_outer = geom_parameters["R_outer"]
+    angle = geom_parameters["angle"]
+    axis = geom_parameters["axis"]
+    lc = geom_parameters["lc"]
+    a = geom_parameters["a"] if geom_parameters["a"] is not None else 7 * lc
+
+    if comm.rank == 0:
+        import warnings
+        import gmsh
+        from numpy import tan, pi
+
+        warnings.filterwarnings("ignore")
+
+        # Initialize gmsh
+        gmsh.initialize()
+        gmsh.model.add("DiskWithRhomboidalHole")
+
+        # Create outer circle (disk boundary)
+        outer_circle = gmsh.model.occ.addDisk(0.0, 0.0, 0.0, R_outer, R_outer, tag=1)
+
+        # Create rhomboidal hole
+        angle_rad = angle * (pi / 180.0)  # Convert angle to radians
+        dx = axis * 0.5
+        dy = axis * 0.5 * (1 / tan(angle_rad / 2))  # Adjust for rhomboid shape
+        print(f"dx = {dx}, dy = {dy}")
+
+        rhomboid_points = [
+            gmsh.model.occ.addPoint(-dx, 0, 0),
+            gmsh.model.occ.addPoint(0, -dy, 0),
+            gmsh.model.occ.addPoint(dx, 0, 0),
+            gmsh.model.occ.addPoint(0, dy, 0),
+        ]
+
+        rhomboid_lines = [
+            gmsh.model.occ.addLine(rhomboid_points[0], rhomboid_points[1]),
+            gmsh.model.occ.addLine(rhomboid_points[1], rhomboid_points[2]),
+            gmsh.model.occ.addLine(rhomboid_points[2], rhomboid_points[3]),
+            gmsh.model.occ.addLine(rhomboid_points[3], rhomboid_points[0]),
+        ]
+
+        rhomboid_loop = gmsh.model.occ.addCurveLoop(rhomboid_lines)
+        rhomboid_surface = gmsh.model.occ.addPlaneSurface([rhomboid_loop])
+
+        cut_entities, _ = gmsh.model.occ.cut(
+            [(2, outer_circle)], [(2, rhomboid_surface)]
+        )
+        surface_tag = cut_entities[0][1]  # Extract tag from result
+
+        # Synchronize before meshing
+        gmsh.model.occ.synchronize()
+
+        # Define physical groups
+        gmsh.model.addPhysicalGroup(2, [surface_tag], tag=1)
+        gmsh.model.setPhysicalName(2, 1, "DiskDomain")
+        gmsh.model.addPhysicalGroup(2, [rhomboid_surface], tag=2)
+        gmsh.model.setPhysicalName(2, 2, "RhomboidHole")
+
+        # Mesh settings
+        gmsh.model.mesh.setSize(gmsh.model.getEntities(0), lc)
+
+        refinement_field = gmsh.model.mesh.field.add("Box")
+        gmsh.model.mesh.field.setNumber(
+            refinement_field, "VIn", lc / 3
+        )  # Finer mesh inside
+        gmsh.model.mesh.field.setNumber(
+            refinement_field, "VOut", lc
+        )  # Coarser mesh outside
+        gmsh.model.mesh.field.setNumber(refinement_field, "XMin", -a)
+        gmsh.model.mesh.field.setNumber(refinement_field, "XMax", a)
+        gmsh.model.mesh.field.setNumber(refinement_field, "YMin", -R_outer)
+        gmsh.model.mesh.field.setNumber(refinement_field, "YMax", R_outer)
+        gmsh.model.mesh.field.setAsBackgroundMesh(refinement_field)
+
+        gmsh.model.mesh.generate(2)
+
+        # Save mesh to file
+        gmsh.write("disc_with_rhomboidal_hole.msh")
+
+        print("Mesh created and saved as 'disc_with_rhomboidal_hole.msh'")
+
+        # Finalize gmsh
+        # gmsh.finalize()
+
+        tdim = 2
+
+    return gmsh.model if comm.rank == 0 else None, tdim
+
+
+def mesh_rect_with_rhomboidal_hole(comm=MPI.COMM_WORLD, geom_parameters=None):
+    """
+    Creates a 2D rectangular mesh with a rhomboidal hole using Gmsh.
+
+    Args:
+        comm (MPI.Comm): MPI communicator.
+        geom_parameters (dict): Dictionary containing geometric parameters:
+            - 'Lx': Length of the rectangle along the x-axis.
+            - 'Ly': Length of the rectangle along the y-axis.
+            - 'angle': Angle of the rhomboid in degrees.
+            - 'axis': Axis length of the rhomboid.
+            - 'lc': Mesh element size.
+
+    Returns:
+        None (Gmsh model is created and can be meshed/exported).
+    """
+    if geom_parameters is None:
+        geom_parameters = {
+            "Lx": 2.0,  # Length of the rectangle along the x-axis
+            "Ly": 1.0,  # Length of the rectangle along the y-axis
+            "angle": 45.0,  # Angle of the rhomboid in degrees
+            "axis": 0.5,  # Axis length of the rhomboid
+            "lc": 0.05,  # Mesh element size
+        }
+
+    Lx = geom_parameters["Lx"]
+    Ly = geom_parameters["Ly"]
+    angle = geom_parameters["angle"]
+    axis = geom_parameters["axis"]
+    lc = geom_parameters["lc"]
+
+    if comm.rank == 0:
+        import warnings
+        import gmsh
+        from numpy import tan, pi
+
+        warnings.filterwarnings("ignore")
+
+        # Initialize gmsh
+        gmsh.initialize()
+        gmsh.model.add("RectWithRhomboidalHole")
+
+        # Create outer rectangle
+        rect = gmsh.model.occ.addRectangle(-Lx / 2, -Ly / 2, 0, Lx, Ly, tag=1)
+
+        # Create rhomboidal hole
+        angle_rad = angle * (pi / 180.0)  # Convert angle to radians
+        dx = axis * 0.5
+        dy = axis * 0.5 * (1 / tan(angle_rad / 2))  # Adjust for rhomboid shape
+
+        rhomboid_points = [
+            gmsh.model.occ.addPoint(-dx, 0, 0),
+            gmsh.model.occ.addPoint(0, -dy, 0),
+            gmsh.model.occ.addPoint(dx, 0, 0),
+            gmsh.model.occ.addPoint(0, dy, 0),
+        ]
+
+        rhomboid_lines = [
+            gmsh.model.occ.addLine(rhomboid_points[0], rhomboid_points[1]),
+            gmsh.model.occ.addLine(rhomboid_points[1], rhomboid_points[2]),
+            gmsh.model.occ.addLine(rhomboid_points[2], rhomboid_points[3]),
+            gmsh.model.occ.addLine(rhomboid_points[3], rhomboid_points[0]),
+        ]
+
+        rhomboid_loop = gmsh.model.occ.addCurveLoop(rhomboid_lines)
+        rhomboid_surface = gmsh.model.occ.addPlaneSurface([rhomboid_loop])
+
+        cut_entities, _ = gmsh.model.occ.cut([(2, rect)], [(2, rhomboid_surface)])
+        surface_tag = cut_entities[0][1]  # Extract tag from result
+
+        # Synchronize before meshing
+        gmsh.model.occ.synchronize()
+
+        # Define physical groups
+        gmsh.model.addPhysicalGroup(2, [surface_tag], tag=1)
+        gmsh.model.setPhysicalName(2, 1, "RectDomain")
+        gmsh.model.addPhysicalGroup(2, [rhomboid_surface], tag=2)
+        gmsh.model.setPhysicalName(2, 2, "RhomboidHole")
+
+        # Mesh settings
+        gmsh.model.mesh.setSize(gmsh.model.getEntities(0), lc)
+
+        gmsh.model.mesh.generate(2)
+
+        # Save mesh to file
+        gmsh.write("rect_with_rhomboidal_hole.msh")
+
+        print("Mesh created and saved as 'rect_with_rhomboidal_hole.msh'")
+
+        # Finalize gmsh
+        # gmsh.finalize()
+    return gmsh.model if comm.rank == 0 else None, 2
+
+
+def create_extended_rectangle(comm=MPI.COMM_WORLD, geom_parameters=None):
+    """
+    Create a mesh of a rectangle (the main domain) embedded in an extended rectangle.
+    The extension is a border of width ext around the main domain.
+    The inner and outer parts are separated by the common interface (embedded as a curve in the mesh).
+
+    Parameters
+    ----------
+    geom_parameters : dict
+        Dictionary with the following keys:
+            "L" : float
+                Length (width) of the main domain (x-direction)
+            "H" : float
+                Height of the main domain (y-direction)
+            "ext" : float
+                Extension length added to each side of the main domain.
+            "lc" : float
+                Mesh size
+            "tdim" : int
+                Geometric dimension (should be 2)
+
+    Returns
+    -------
+    msh_filename : str
+        Name of the saved MSH file.
+    outer_tag, inner_tag : tuple
+        A tuple with the physical group tags for the extended (outer) region and for the inner (main) domain.
+    """
+    gmsh.initialize()
+    gmsh.model.add("extended_rectangle")
+    if geom_parameters is None:
+        raise ValueError("geom_parameters must be provided.")
+
+    L = geom_parameters["L"]
+    H = geom_parameters["H"]
+    ext = geom_parameters["ext"]
+    lc = geom_parameters["lc"]
+    tdim = geom_parameters["tdim"]
+
+    # Create the outer (extended) rectangle.
+    # We center the main domain at the origin; the outer rectangle extends ext beyond the main domain.
+    # Outer rectangle bounds:
+    #   x from -L/2 - ext to L/2 + ext, y from -H/2 - ext to H/2 + ext.
+    outer = gmsh.model.occ.addRectangle(
+        -L / 2,
+        -H / 2 - ext,
+        0,
+        L,
+        H + 2 * ext,
+        tag=1,
+        # -L / 2 - ext, -H / 2 - ext, 0, L + 2 * ext, H + 2 * ext, tag=1
+    )
+
+    # Create the inner (main) domain rectangle.
+    inner = gmsh.model.occ.addRectangle(-L / 2, -H / 2, 0, L, H, tag=2)
+
+    # Fragment the outer surface with the inner rectangle.
+    # This operation splits the outer rectangle into two regions: one corresponding to the inner domain
+    # and one corresponding to the outer extension.
+    # The fragment command guarantees that the common boundary is preserved as an interface.
+    fragments = gmsh.model.occ.fragment([(2, outer)], [(2, inner)])
+    gmsh.model.occ.synchronize()
+
+    # After the fragment, there will be several surfaces.
+    # We need to identify which one corresponds to the inner domain and which ones form the extension.
+    # A simple approach is to use the center of mass. We expect the inner domain to have its center inside the original inner rectangle.
+
+    # Get all surfaces (entities of dim 2)
+    surfaces = gmsh.model.getEntities(dim=2)
+
+    top_ext = []
+    bottom_ext = []
+    for dim, tag in surfaces:
+        com = gmsh.model.occ.getCenterOfMass(dim, tag)
+        print(com[0], com[1])
+        if com[1] > lc:
+            top_ext.append(tag)
+        elif com[1] < -lc:
+            bottom_ext.append(tag)
+
+    print("Top extension surfaces:", top_ext)
+    print("Bottom extension surfaces:", bottom_ext)
+
+    edge_occurrences = {}  # Dictionary to store, for each edge, a list of surfaces (by their tag) it belongs to.
+    surface_boundaries = {}  # Dictionary to store boundaries for each surface.
+
+    for entity in surfaces:
+        dim, tag = entity
+        boundary_edges = gmsh.model.getBoundary([entity], oriented=False)
+        surface_boundaries[tag] = boundary_edges
+
+        # Loop over each boundary edge for the surface.
+        for be in boundary_edges:
+            # be is a tuple, e.g. (1, edge_tag)
+            edge_tag = be[1]
+            if edge_tag in edge_occurrences:
+                edge_occurrences[edge_tag].append(tag)
+            else:
+                edge_occurrences[edge_tag] = [tag]
+
+    internal_edges = [
+        edge_tag
+        for edge_tag, surf_tags in edge_occurrences.items()
+        if len(surf_tags) > 1
+    ]
+
+    print("Surface boundaries:")
+    for s_tag, b_edges in surface_boundaries.items():
+        print(f"Surface {s_tag}: edges {[be[1] for be in b_edges]}")
+
+    print("Internal interface edge tags:", internal_edges)
+
+    # Retrieve the boundaries (edges) of the top and bottom extension surfaces.
+    top_boundary_edges = gmsh.model.getBoundary(
+        [(2, tag) for tag in top_ext], oriented=False
+    )
+    bottom_boundary_edges = gmsh.model.getBoundary(
+        [(2, tag) for tag in bottom_ext], oriented=False
+    )
+    # Extract the edge tags.
+    top_edge_tags = [
+        edge[1] for edge in top_boundary_edges if edge[1] not in internal_edges
+    ]
+    bottom_edge_tags = [
+        edge[1] for edge in bottom_boundary_edges if edge[1] not in internal_edges
+    ]
+    # Create physical groups for the top and bottom boundaries (these will be used for applying Dirichlet BCs).
+    top_bound_tag = gmsh.model.addPhysicalGroup(1, top_edge_tags, tag=21)
+    gmsh.model.setPhysicalName(1, top_bound_tag, "Top_Boundary")
+    bottom_bound_tag = gmsh.model.addPhysicalGroup(1, bottom_edge_tags, tag=22)
+    gmsh.model.setPhysicalName(1, bottom_bound_tag, "Bottom_Boundary")
+    print("Top boundary edges:", top_edge_tags)
+    print("Bottom boundary edges:", bottom_edge_tags)
+
+    inner_surfs = []  # List for the inner domain surface(s)
+    outer_surfs = []  # List for the extension surfaces
+
+    # Loop through each surface, get its center of mass, and classify it.
+    for dim, tag in surfaces:
+        com = gmsh.model.occ.getCenterOfMass(dim, tag)
+        # Check if the center is inside the inner rectangle bounds.
+        if (-L / 2 <= com[0] <= L / 2) and (-H / 2 <= com[1] <= H / 2):
+            inner_surfs.append(tag)
+        else:
+            outer_surfs.append(tag)
+
+    # To make sure the internal interface is embedded (i.e. the same nodes appear on both subdomains),
+    # use the OCC boolean fragmentation to split the overall domain.
+    # Here we create physical groups so that we can later impose different material properties or boundary conditions.
+    inner_tag = gmsh.model.addPhysicalGroup(2, inner_surfs, tag=10)
+    gmsh.model.setPhysicalName(2, inner_tag, "Main_Domain")
+    outer_tag = gmsh.model.addPhysicalGroup(2, outer_surfs, tag=11)
+    gmsh.model.setPhysicalName(2, outer_tag, "Extended_Domain")
+
+    # Set the mesh size everywhere (only one characteristic length lc used)
+    gmsh.model.mesh.setSize(gmsh.model.getEntities(0), lc)
+
+    # Generate the mesh
+    gmsh.model.mesh.generate(tdim)
+
+    # Optionally save the mesh
+    msh_filename = "extended_rectangle_with_interface.msh"
+    gmsh.write(msh_filename)
+
+    # gmsh.finalize()
+
+    return gmsh.model if comm.rank == 0 else None, 2
