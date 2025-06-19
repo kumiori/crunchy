@@ -1,12 +1,14 @@
 # Numerical Experiments Package
 
-A Python package for crafting numerical experiments with advanced image filters and integration with FEniCS.
+# crunchy
+
+A Python package for crafting numerical experiments, integrated with irrevolutions.
 
 ## Features
 
 -   Generate 2D Gaussian fields
 -   Apply advanced image filters (motion blur, radial blur, twirl)
--   Integrate fields into FEniCS for numerical simulations
+-   Integrate fields into dolfinx for numerical simulations
 
 ## Installation
 
