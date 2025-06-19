@@ -438,7 +438,7 @@ def load_parameters(file_path, model="at1"):
 
     with open(file_path) as f:
         parameters = yaml.load(f, Loader=yaml.FullLoader)
-    parameters["geometry"]["mesh_size_factor"] = 4
+    parameters["geometry"]["mesh_size_factor"] = 3
     parameters["geometry"]["Lx"] = 3.0
     parameters["geometry"]["Ly"] = 0.1
 

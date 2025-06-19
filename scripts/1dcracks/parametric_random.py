@@ -109,8 +109,8 @@ if __name__ == "__main__":
                 signature = hashlib.md5(str(parameters).encode("utf-8")).hexdigest()
 
             print(f"Signature: {signature}")
-            # history_data = run_computation(parameters, experiment_dir)
-            history_data = np.random.rand(10, 3)
+            history_data = run_computation(parameters, experiment_dir)
+            # history_data = np.random.rand(10, 3)
             experimental_data.append(history_data)
 
     with dolfinx.common.Timer(f"~Postprocessing and Vis") as timer:
@@ -129,3 +129,9 @@ if __name__ == "__main__":
     ]
     timings = table_timing_data(tasks)
     list_timings(MPI.COMM_WORLD, [dolfinx.common.TimingType.wall])
+
+    if comm.rank == 0:
+        df = pd.read_pickle(f"{experiment_dir}/experimental_data.pkl")
+        print(df)
+        print(timings)
+        print("Done")

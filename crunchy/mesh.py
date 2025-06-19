@@ -161,7 +161,7 @@ def mesh_circle_with_holes_gmshapi(
 
         surface_entities = [model[1] for model in model.getEntities(tdim)]
         model.addPhysicalGroup(tdim, surface_entities, tag=666)
-        model.setPhysicalName(tdim, 666, "Film surface")
+        model.setPhysicalName(tdim, 666, "Domain surface")
 
         for dim in range(4):  # Loop over dimensions 0 (points) to 3 (volumes)
             entities = gmsh.model.getEntities(dim)
@@ -175,8 +175,6 @@ def mesh_circle_with_holes_gmshapi(
         # Optional: Write msh file
         if msh_file is not None:
             gmsh.write(msh_file)
-
-        gmsh.finalize()
 
     return gmsh.model if comm.rank == 0 else None, tdim
 

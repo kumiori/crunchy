@@ -12,7 +12,6 @@ authors = [
 dependencies = [
     "irrevolutions @ git+https://github.com/kumiori/irrevolutions.git",
     "visuals @ git+https://github.com/kumiori/visuals.git",
-    "preposterous @ git+https://github.com/kumiori/preposterous.git",
     "numpy",
     "scipy",
     "matplotlib",

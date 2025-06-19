@@ -65,13 +65,12 @@ import dolfinx
 
 
 def create_function_spaces_2d(mesh):
-    # element_u = VectorElement("Lagrange", mesh.ufl_cell(), degree=1, dim=2)
-    # element_alpha = FiniteElement("Lagrange", mesh.ufl_cell(), degree=1)
     element_u = basix.ufl.element("Lagrange", mesh.basix_cell(), degree=1, shape=(2,))
     element_alpha = basix.ufl.element("Lagrange", mesh.basix_cell(), degree=1)
 
     V_u = dolfinx.fem.functionspace(mesh, element_u)
     V_alpha = dolfinx.fem.functionspace(mesh, element_alpha)
+
     return V_u, V_alpha
 
 

@@ -16,7 +16,7 @@ from crunchy.core import (
 )
 
 from crunchy.plots import plot_spectrum
-from crunchy.mesh import mesh_circle_with_holes_gmshapi
+from crunchy.mesh import create_extended_rectangle
 from dolfinx.io import XDMFFile, gmshio
 
 import dolfinx
@@ -96,90 +96,6 @@ from crunchy.utils import write_history_data
 
 OUTER_DOMAIN = 11
 INNER_DOMAIN = 10
-
-from ufl import as_vector, as_matrix, cos, sin
-
-
-def rotation_displacement(x, centre, angle):
-    """
-    Return a displacement field representing a 2D rotation about a given point.
-
-    Parameters:
-        x: ufl argument
-            The spatial coordinate (should be a vector of length 2).
-        centre: tuple of floats (cx, cy)
-            The coordinates of the rotation centre.
-        angle: ufl expression or float
-            The rotation angle in radians.
-
-    Returns:
-        u: ufl Expr
-            The displacement field defined as u(x) = R*(x - centre).
-    """
-    # Unpack centre coordinates
-    cx, cy = centre
-
-    # Represent the centre as a UFL vector.
-    centre_vec = as_vector((cx, cy))
-
-    x_2d = x[:2]
-
-    # Compute the relative coordinate (translation to the center)
-    # xi = x_2d - centre_vec
-    xi = x_2d
-    # Define the rotation matrix in 2D.
-    c = np.cos(angle)
-    s = np.sin(angle)
-    R = np.array([[c, -s], [s, c]])
-    # Compute the rotated vector.
-    rotated = R * xi
-    # The displacement field is given by the difference between the rotated position and the original position.
-    # u = rotated - xi
-
-    return as_vector(rotated)
-
-
-def rotation_displacement_numeric(x, centre, angle):
-    """
-    Compute a rotation-induced displacement field around a given centre.
-
-    The function assumes x has shape (d, N) where d>=2. Only the first two
-    components are used for the rotation.
-
-    Parameters
-    ----------
-    x : np.ndarray
-        Array of coordinates with shape (d, N).
-    centre : tuple of floats
-        The (cx, cy) coordinates about which to rotate.
-    angle : float
-        Rotation angle in radians.
-
-    Returns
-    -------
-    u : np.ndarray
-        Displacement field of shape (d, N). Only the first two components are nonzero.
-    """
-    # Ensure x is a NumPy array
-    x = x[:2]
-    x = np.asarray(x)  # Expected shape: (2, N)
-    N = x.shape[1]
-
-    # Unpack centre coordinates and create centre array with shape (2, N)
-    cx, cy = centre
-    centre_arr = np.array([[cx], [cy]])  # shape (2, 1)
-    centre_arr = np.repeat(centre_arr, N, axis=1)  # shape (2, N)
-
-    # Compute the vector from centre to each point
-    xi = x - centre_arr  # shape (2, N)
-    # Build the rotation matrix explicitly
-    c = np.cos(angle)
-    s = np.sin(angle)
-    R = np.array([[c, -s], [s, c]])  # shape (2,2)
-
-    # Compute the rotated coordinates
-    rotated = R @ xi  # shape (2, N)
-    return rotated
 
 
 def postprocess(
@@ -413,32 +329,19 @@ def postprocess(
 def run_computation(parameters, storage):
     nameExp = parameters["geometry"]["geom_type"]
     geom_params = {
-        "R": 1.0,  # Main domain width
-        "lc": 0.1,  # Characteristic mesh size
+        "L": 1.0,  # Main domain width
+        "H": 1.0,  # Main domain height
+        "ext": 0.2,  # Extension width around the main domain
+        "lc": 0.05,  # Characteristic mesh size
         "tdim": 2,  # Geometric dimension
-        "hole_radius": 0.2,
     }
-    # geom_params["lc"] = parameters["model"].get("ell") / parameters["geometry"].get(
-    #     "mesh_size_factor", 1.0
-    # )
+    geom_params["lc"] = parameters["model"].get("ell") / parameters["geometry"].get(
+        "mesh_size_factor", 1.0
+    )
 
     with dolfinx.common.Timer(f"~Meshing") as timer:
-        gmsh_model, tdim = mesh_circle_with_holes_gmshapi(
-            "discwithholes",
-            geom_params["R"],
-            geom_params["lc"],
-            tdim=geom_params["tdim"],
-            num_holes=1,
-            hole_radius=[geom_params["hole_radius"]],
-            hole_positions=[(0.0, 0.0)],
-            refinement_factor=0.5,
-            order=1,
-            # msh_file=msh_file,
-            comm=MPI.COMM_WORLD,
-        )
-
+        gmsh_model, tdim = create_extended_rectangle(comm, geom_params)
         mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, model_rank, tdim)
-
     dx = Measure("dx", domain=mesh, subdomain_data=mts)
     outdir = os.path.join(os.path.dirname(__file__), "output")
     prefix = setup_output_directory(storage, parameters, outdir)
@@ -458,77 +361,71 @@ def run_computation(parameters, storage):
     alpha_ub = dolfinx.fem.Function(V_alpha, name="UpperBoundDamage")
     alpha_lb = dolfinx.fem.Function(V_alpha, name="LowerBoundDamage")
     t = dolfinx.fem.Constant(mesh, np.array(0.0, dtype=PETSc.ScalarType))
-    inner_disp = dolfinx.fem.Function(V_u)
-    inner_disp.interpolate(
-        lambda x: rotation_displacement_numeric(x, (0.0, 0.0), float(np.pi / 2))
-    )
-    # inner_disp.interpolate(
-    #     lambda x: np.stack([np.full_like(x[0], t.value), np.zeros_like(x[1])], axis=0)
-    # )
+    top_disp = dolfinx.fem.Function(V_u)
 
-    # plot the inner_disp
-    xvfb.start_xvfb(wait=0.05)
-    pyvista.OFF_SCREEN = True
-    plotter = pyvista.Plotter(shape=(1, 1))
-
-    plot_vector(inner_disp, plotter)
-    plotter.screenshot(f"{outdir}/inner.png")
-
-    __import__("pdb").set_trace()
-    outer_disp = dolfinx.fem.Constant(
+    bottom_disp = dolfinx.fem.Constant(
         mesh, np.array([0.0, 0.0], dtype=PETSc.ScalarType)
     )
 
-    for f in [u, alpha_lb, alpha_ub, inner_disp]:
+    for f in [u, alpha_lb, alpha_ub, top_disp]:
         f.x.petsc_vec.ghostUpdate(
             addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
         )
 
     # Bcs
-    # Locate boundaries
-    outer_dofs_u = locate_dofs_geometrical(
-        V_u, lambda x: np.isclose(x[0] ** 2 + x[1] ** 2, geom_params["R"] ** 2)
-    )
-
-    inner_dofs_u = locate_dofs_topological(
+    # Locate top and bottom boundaries
+    top_dofs_u = locate_dofs_topological(
         V_u,
         mesh.topology.dim - 1,
-        fts.find(10),
+        fts.find(21),
+    )
+    bottom_dofs_u = locate_dofs_topological(
+        V_u,
+        mesh.topology.dim - 1,
+        fts.find(22),
     )
 
     bcs_u = [
-        dirichletbc(outer_disp, outer_dofs_u),
-        dirichletbc(inner_disp, inner_dofs_u, V_u),
+        dirichletbc(top_disp, top_dofs_u),
+        dirichletbc(bottom_disp, bottom_dofs_u, V_u),
     ]
-    # top_dofs_alpha = locate_dofs_topological(
-    #     V_alpha,
-    #     mesh.topology.dim - 1,
-    #     fts.find(21),
-    # )
-    # bottom_dofs_alpha = locate_dofs_topological(
-    #     V_alpha,
-    #     mesh.topology.dim - 1,
-    #     fts.find(22),
-    # )
+    top_dofs_alpha = locate_dofs_topological(
+        V_alpha,
+        mesh.topology.dim - 1,
+        fts.find(21),
+    )
+    bottom_dofs_alpha = locate_dofs_topological(
+        V_alpha,
+        mesh.topology.dim - 1,
+        fts.find(22),
+    )
 
     bcs_alpha = [
-        # dirichletbc(np.array(0.0), bottom_dofs_alpha, V_alpha),
-        # dirichletbc(np.array(0.0), top_dofs_alpha, V_alpha),
+        dirichletbc(np.array(0.0), bottom_dofs_alpha, V_alpha),
+        dirichletbc(np.array(0.0), top_dofs_alpha, V_alpha),
     ]
 
     bcs = {"bcs_u": bcs_u, "bcs_alpha": bcs_alpha}
-    __import__("pdb").set_trace()
+
     model = models.DeviatoricSplit(parameters["model"])
 
     INNER_DOMAIN = 10
     OUTER_DOMAIN = 11
 
     dx = Measure("dx", domain=mesh, subdomain_data=mts)
+    dx_phys = Measure("dx", domain=mesh, subdomain_data=mts, subdomain_id=INNER_DOMAIN)
+    dx_ext = Measure("dx", domain=mesh, subdomain_data=mts, subdomain_id=OUTER_DOMAIN)
 
     # dolfinx.fem.assemble_scalar(dolfinx.fem.form(1*dx_ext))
     # dolfinx.fem.assemble_scalar(dolfinx.fem.form(1*dx_phys))
-    total_energy = model.total_energy_density(state) * dx
+    stiff_coeff = parameters["model"].get("stiffness_coeff", 1000.0)
+    total_energy = (
+        model.total_energy_density(state) * dx_phys
+        + stiff_coeff * model.elastic_energy_density(state) * dx_ext
+        + model.damage_energy_density(state) * dx_ext
+    )
 
+    # total_energy = model.total_energy_density(state) * dx
     load_par = parameters["loading"]
     loads = np.linspace(load_par["min"], load_par["max"], load_par["steps"])
 

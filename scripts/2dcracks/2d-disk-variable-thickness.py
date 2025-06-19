@@ -7,6 +7,15 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+# from libidris.core import elastic_energy_density_film, damage_energy_density, stress
+# from libidris.core import a
+# from libidris.core import (
+#     setup_output_directory,
+#     save_parameters,
+#     create_function_spaces_2d,
+#     initialize_functions,
+# )
+
 import matplotlib.pyplot as plt
 import dolfinx
 import dolfinx.mesh
@@ -53,16 +62,23 @@ from irrevolutions.utils.viz import plot_mesh, plot_profile, plot_scalar, plot_v
 from irrevolutions.models import BrittleMembraneOverElasticFoundation as ThinFilm
 from irrevolutions.meshes.primitives import mesh_circle_gmshapi
 
+from irrevolutions.models import BanquiseVaryingThickness as VariableThickness
+
 from mpi4py import MPI
 from petsc4py import PETSc
 from pyvista.plotting.utilities import xvfb
+
 from crunchy.core import (
+    # elastic_energy_density_film,
+    # damage_energy_density,
+    # stress,
+    # a,
     setup_output_directory,
     save_parameters,
     create_function_spaces_2d,
     initialise_functions,
 )
-import basix
+# from irrevolutions.utils.viz import _plot_bif_spectrum_profiles
 
 petsc4py.init(sys.argv)
 comm = MPI.COMM_WORLD
@@ -70,103 +86,80 @@ comm = MPI.COMM_WORLD
 # Mesh on node model_rank and then distribute
 model_rank = 0
 
-from crunchy.mesh import (
-    mesh_circle_with_holes_gmshapi_old,
-    mesh_circle_with_holes_gmshapi,
+BINARY_DATA = True
+
+
+from crunchy.filters import (
+    radial_blur_zoom,
+    radial_blur_spin,
+    twirl_effect,
+    motion_blur,
+    twirl_effect_quadratic,
 )
-from irrevolutions.utils.plots import (
-    plot_energies,
-)
-
-from crunchy.utils import plot_spectrum
+from crunchy.core import generate_gaussian_field
 
 
-def split_stress(stress_tensor):
+def plot_spectrum(history_data):
     """
-    Split stress tensor into hydrostatic and deviatoric components.
+    Plot the spectrum (eigenvalues) of eigs_ball and eigs_cone for each load step.
 
     Parameters:
-    stress_tensor (ufl.Expr): The stress tensor to split.
-
-    Returns:
-    tuple: hydrostatic and deviatoric stress tensors.
+        history_data (dict): Dictionary containing load steps and eigenvalue data.
     """
-    # Identity tensor
-    I = ufl.Identity(len(stress_tensor.ufl_shape))
+    # Extract load steps and eigenvalue data
+    load_steps = history_data.get("load", [])
+    eigs_ball = history_data.get("eigs_ball", [])
+    eigs_cone = history_data.get("eigs_cone", [])
 
-    # Compute hydrostatic stress
-    sigma_hydrostatic = ufl.tr(stress_tensor) / len(stress_tensor.ufl_shape)
-    # Compute deviatoric stress
-    sigma_deviatoric = stress_tensor - sigma_hydrostatic * I
+    # Ensure we have data for plotting
+    if not load_steps or not eigs_ball:
+        print("No data to plot.")
+        return
 
-    return sigma_hydrostatic, sigma_deviatoric
+    # Iterate over load steps
+    fig, ax = plt.subplots(figsize=(10, 6))
 
+    for step_idx, load_step in enumerate(load_steps):
+        print(f"Plotting spectrum for load step {step_idx} (load: {load_step})")
+        # # Plot eigs_ball for the current load step
+        if eigs_ball:  # Ensure it's not empty
+            _eigs_ball_step = eigs_ball[step_idx]
+            ax.scatter(
+                [load_step] * len(_eigs_ball_step),
+                _eigs_ball_step,
+                # label=f"eigs_ball (step {step_idx})",
+                color="blue",
+                alpha=0.7,
+            )
+        ax.axhline(y=0, color="black", linestyle="--")
 
-def save_stress_components(mesh, stress_tensor, output_file, t=0):
-    """
-    Save stress tensor components, hydrostatic, and deviatoric parts.
+        # # Plot eigs_cone for the current load step, if present
+        # if step_idx < len(eigs_cone):
+        # cone_data = eigs_cone[step_idx]
+        #     if not np.isnan(cone_data):  # Check if eigs_cone is valid
+        #         plt.axhline(
+        #             y=cone_data,
+        #             color="red",
+        #             linestyle="--",
+        #             label=f"eigs_cone (step {step_idx})",
+        #         )
 
-    Parameters:
-    mesh (dolfinx.Mesh): Mesh object.
-    stress_tensor (ufl.Expr): Stress tensor to process.
-    output_file (str): Path to the XDMF file for saving data.
-    """
-    dtype = PETSc.ScalarType
-    # Create function spaces
-    scalar_space = dolfinx.fem.functionspace(
-        mesh, ("Discontinuous Lagrange", 0)
-    )  # For scalars
-    element_vec = basix.ufl.element(
-        "Discontinuous Lagrange", mesh.basix_cell(), degree=0, shape=(2,)
-    )
-    element_vec_3d = basix.ufl.element(
-        "Discontinuous Lagrange", mesh.basix_cell(), degree=0, shape=(3,)
-    )
-    element_tens = basix.ufl.element(
-        "Discontinuous Lagrange", mesh.basix_cell(), degree=0, shape=(2, 2)
-    )
-    vector_space = dolfinx.fem.functionspace(mesh, element_vec)
-    stress_vector_space = dolfinx.fem.functionspace(mesh, element_vec_3d)
-    tensor_space = dolfinx.fem.functionspace(mesh, element_tens)
-    # )  # For stress components
+        # Add plot labels and legend
+        # ax.title(f"Spectrum at Load Step {step_idx} (Load: {load_step})")
+        # ax.set_xlabel("Eigenvalue Index")
+        # ax.set_ylabel("Eigenvalue Magnitude")
+        # ax.legend()
+        # plt.grid(True)
 
-    # Create functions for storage
-    stress_components = Function(vector_space, name="StressComponents")
-    hydrostatic = Function(scalar_space, name="HydrostaticStress")
-    deviatoric_components = Function(vector_space, name="DeviatoricStressComponents")
-    deviatoric = Function(tensor_space, name="DeviatoricStress")
-    stress_vector_function = dolfinx.fem.Function(
-        stress_vector_space, name="StressVector"
-    )
+        # Save the figure for each step
+        # fig.savefig(f"spectrum.png")
+        # plt.close(fig)
+        # print(
+        # f"Saved spectrum plot for load step {step_idx} as spectrum_step_{step_idx}.png"
+        # )
+        # fig.close()
 
-    # Extract components
-    sigma_hydrostatic, sigma_deviatoric = split_stress(stress_tensor)
-    sigma_hydro_expr = dolfinx.fem.Expression(
-        sigma_hydrostatic, scalar_space.element.interpolation_points(), dtype=dtype
-    )
-    stress_vector_function.interpolate(
-        dolfinx.fem.Expression(
-            ufl.as_vector(
-                [stress_tensor[0, 0], stress_tensor[1, 1], stress_tensor[0, 1]]
-            ),
-            stress_vector_space.element.interpolation_points(),
-            dtype=PETSc.ScalarType,
-        )
-    )
-    sigma_dev_expr = dolfinx.fem.Expression(
-        sigma_deviatoric, vector_space.element.interpolation_points(), dtype=dtype
-    )
-
-    # Interpolate components
-    hydrostatic.interpolate(sigma_hydro_expr)
-    deviatoric.interpolate(sigma_dev_expr)
-
-    # Save to XDMF
-    with XDMFFile(mesh.comm, output_file, "a") as xdmf:
-        # xdmf.write_mesh(mesh)
-        xdmf.write_function(hydrostatic, t)
-        xdmf.write_function(stress_vector_function, t)
-        xdmf.write_function(deviatoric, t)
+    return fig, ax
 
 
 def run_computation(parameters, storage=None):
@@ -177,64 +170,55 @@ def run_computation(parameters, storage=None):
     # Get geometry model
     parameters["geometry"]["geom_type"]
 
+    gmsh_model, tdim = mesh_circle_gmshapi(
+        _nameExp, R, lc, tdim=2, order=1, msh_file=None, comm=MPI.COMM_WORLD
+    )
+    mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, model_rank, tdim)
+
     outdir = os.path.join(os.path.dirname(__file__), "output")
+
     prefix = setup_output_directory(storage, parameters, outdir)
+
     signature = save_parameters(parameters, prefix)
-
-    geom_signature = hashlib.md5(
-        str(parameters["geometry"]).encode("utf-8")
-    ).hexdigest()
-
-    msh_file = f"meshes/meshwithholes-{geom_signature}.msh"
-    # if not os.path.exists(msh_file):
-    gmsh_model, tdim = mesh_circle_with_holes_gmshapi(
-        "discwithholes",
-        parameters["geometry"]["R"],
-        lc=lc,
-        tdim=2,
-        num_holes=parameters["geometry"]["num_holes"],
-        hole_radius=parameters["geometry"]["hole_radius"],
-        hole_positions=None,
-        refinement_factor=0.8,
-        order=1,
-        msh_file=msh_file,
-        comm=MPI.COMM_WORLD,
-    )
-
-    mesh, cell_tags, facet_tags = gmshio.read_from_msh(
-        msh_file, gdim=2, comm=MPI.COMM_WORLD
-    )
 
     with XDMFFile(
         comm, f"{prefix}/{_nameExp}.xdmf", "w", encoding=XDMFFile.Encoding.HDF5
     ) as file:
         file.write_mesh(mesh)
 
-    stress_output_file = f"{prefix}/stress.xdmf"
-    # Save to XDMF
-    with XDMFFile(mesh.comm, stress_output_file, "w") as xdmf:
-        xdmf.write_mesh(mesh)
-
     if comm.rank == 0:
         plt.figure()
         ax = plot_mesh(mesh)
         fig = ax.get_figure()
         fig.savefig(f"{prefix}/mesh.png")
-        fig.savefig(f"{msh_file[0:-3]}.png")
 
     # Functional Setting
-    # gmsh_model, tdim = mesh_circle_gmshapi(
-    #     _nameExp, R, lc, tdim=2, order=1, msh_file=None, comm=MPI.COMM_WORLD
-    # )
-    # mesh, mts, fts = gmshio.model_to_mesh(gmsh_model, comm, model_rank, tdim)
 
     V_u, V_alpha = create_function_spaces_2d(mesh)
-    W = dolfinx.fem.functionspace(mesh, ("Discontinuous Lagrange", 0))
     u, u_, alpha, β, v, state = initialise_functions(V_u, V_alpha)
 
     # Bounds
     alpha_ub = dolfinx.fem.Function(V_alpha, name="UpperBoundDamage")
     alpha_lb = dolfinx.fem.Function(V_alpha, name="LowerBoundDamage")
+
+    # Define the state
+    # zero_u = Function(V_u, name="BoundaryDatum")
+    # zero_u.interpolate(lambda x: (np.zeros_like(x[0]), np.zeros_like(x[1])))
+
+    thickness = dolfinx.fem.Function(V_alpha)
+
+    # Get the bounds of the domain
+    x_coords = mesh.geometry.x[:, 0]  # Extract x[0] values
+    x_min, x_max = np.min(x_coords), np.max(x_coords)
+
+    # Define the linear thickness function
+    def linear_thickness(x):
+        return 0.5 + (x[0] - x_min) / (x_max - x_min) * 1.0
+
+    # Interpolate the thickness function into the scalar field
+    thickness.interpolate(linear_thickness)
+
+    u_t = Function(V_u, name="InelasticDisplacement")
 
     def radial_field(x):
         # r = np.sqrt(x[0]**2 + x[1]**2)
@@ -243,7 +227,6 @@ def run_computation(parameters, storage=None):
         return np.array([u_x, u_y])
 
     tau = Constant(mesh, np.array(0.0, dtype=PETSc.ScalarType))
-    u_t = Function(V_u, name="InelasticDisplacement")
 
     u_t.interpolate(lambda x: radial_field(x) * tau)
     eps_t = tau * ufl.as_tensor([[1.0, 0], [0, 1.0]])
@@ -253,41 +236,27 @@ def run_computation(parameters, storage=None):
     mesh.topology.create_connectivity(fdim, tdim)
     boundary_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
 
+    alpha_lb.interpolate(lambda x: np.zeros_like(x[0]))
+    alpha_ub.interpolate(lambda x: np.ones_like(x[0]))
+
+    u_boundary_dofs = dolfinx.fem.locate_dofs_topological(V_u, fdim, boundary_facets)
+
     for f in [u, u_t, alpha_lb, alpha_ub]:
         f.x.petsc_vec.ghostUpdate(
             addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
         )
 
-    boundary_dofs = dolfinx.fem.locate_dofs_topological(
-        V_u, mesh.topology.dim - 1, facet_tags.indices
-    )
-    mesh_boundary_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
-    ext_boundary_u_dofs = dolfinx.fem.locate_dofs_topological(
-        V_u, fdim, mesh_boundary_facets
-    )
-
-    holes_bc_values = dolfinx.fem.Constant(mesh, PETSc.ScalarType([0.0, 0.0]))
-    # subtract the holes from the boundary dofs
-    # outer_ext_dofs = np.setdiff1d(ext_boundary_u_dofs, boundary_dofs)
-
-    # locate boundary dofs geometrically
-    u_boundary_dofs = dolfinx.fem.locate_dofs_geometrical(
-        V_u, lambda x: np.isclose(x[0] ** 2 + x[1] ** 2, R**2)
-    )
-    # __import__("pdb").set_trace()
-    bcs_u = [
-        dolfinx.fem.dirichletbc(holes_bc_values, boundary_dofs, V_u),
-        # dolfinx.fem.dirichletbc(u_t, u_boundary_dofs),
-    ]
-
-    # bcs_u = []
+    # bcs_u = [dirichletbc(u_t, u_boundary_dofs)]
+    bcs_u = []
     bcs_alpha = []
 
     bcs = {"bcs_u": bcs_u, "bcs_alpha": bcs_alpha}
 
     dx = ufl.Measure("dx", domain=mesh)
 
-    model = ThinFilm(parameters["model"], eps_0=eps_t)
+    model = VariableThickness(thickness, parameters["model"], eps_0=eps_t)
+    # model = ThinFilm(parameters["model"], eps_0=eps_t)
+
     total_energy = model.total_energy_density(state) * dx
     load_par = parameters["loading"]
     loads = np.linspace(load_par["min"], load_par["max"], load_par["steps"])
@@ -320,10 +289,8 @@ def run_computation(parameters, storage=None):
 
     for i_t, t in enumerate(loads):
         tau.value = t
-        u_t.interpolate(lambda x: radial_field(x) * tau)
 
         # update the lower bound
-
         alpha.x.petsc_vec.copy(alpha_lb.x.petsc_vec)
         alpha_lb.x.petsc_vec.ghostUpdate(
             addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
@@ -349,6 +316,17 @@ def run_computation(parameters, storage=None):
 
         _logger.critical(f"-- Solving Stability (Stability) for t = {t:3.2f} --")
         stable = stability.solve(alpha_lb, eig0=z0, inertia=inertia)
+
+        with dolfinx.common.Timer(f"~Output and Storage") as timer:
+            if BINARY_DATA:
+                with XDMFFile(
+                    comm,
+                    f"{prefix}/{_nameExp}.xdmf",
+                    "a",
+                    encoding=XDMFFile.Encoding.HDF5,
+                ) as file:
+                    file.write_function(u, t)
+                    file.write_function(alpha, t)
 
         with dolfinx.common.Timer("~Postprocessing and Vis"):
             fracture_energy = comm.allreduce(
@@ -378,63 +356,34 @@ def run_computation(parameters, storage=None):
             plt.close(fig)
 
             fig, ax = plot_spectrum(history_data)
-            fig.savefig(f"{_storage}/spectrum-Λ={parameters['model']['ell_e']}.png")
+            fig.savefig(f"{_storage}/spectrum.png")
             plt.close(fig)
-
-            # xvfb.start_xvfb(wait=0.05)
-            pyvista.OFF_SCREEN = True
-
-            plotter = pyvista.Plotter(
-                title="Displacement",
-                window_size=[1600, 600],
-                shape=(1, 2),
-            )
-
-            _plt = plot_scalar(alpha, plotter, subplot=(0, 0))
-            _plt = plot_vector(u, plotter, subplot=(0, 1))
-            _plt.screenshot(os.path.join(prefix, f"state_MPI{comm.size}-{i_t}.png"))
-
-            average_stress = model.stress_average(model.eps(u), alpha)
-            stress = model.stress(model.eps(u), alpha)
-            stress_projected = ufl.as_tensor(
-                [
-                    [stress[0, 0], stress[0, 1]],
-                    [stress[1, 0], stress[1, 1]],
-                ]
-            )
-
-            save_stress_components(mesh, stress_projected, stress_output_file, t)
-
-        with dolfinx.common.Timer(f"~Output and Storage") as timer:
-            with XDMFFile(
-                comm,
-                f"{prefix}/{_nameExp}.xdmf",
-                "a",
-                encoding=XDMFFile.Encoding.HDF5,
-            ) as file:
-                file.write_function(u, t)
-                file.write_function(alpha, t)
-                # file.write_function(stress_h, t)
 
     return history_data
 
 
-def load_parameters(file_path, model="at1"):
+def load_parameters(file_path, ndofs, model="at1"):
+    """
+    Load parameters from a YAML file.
+
+    Args:
+        file_path (str): Path to the YAML parameter file.
+
+    Returns:
+        dict: Loaded parameters.
+    """
     import hashlib
 
     with open(file_path) as f:
         parameters = yaml.load(f, Loader=yaml.FullLoader)
+    parameters["geometry"]["mesh_size_factor"] = 2
+    parameters["geometry"]["R"] = 1
 
-    parameters["geometry"]["R"] = 1.0
-    parameters["geometry"]["num_holes"] = 3
-    parameters["geometry"]["hole_radius"] = 0.01
-
-    parameters["geometry"]["mesh_size_factor"] = 3
-    parameters["model"]["ell"] = 0.1
-    parameters["model"]["ell_e"] = 0.3
-
-    parameters["loading"]["min"] = 0.1
-    parameters["loading"]["max"] = 1.5
+    parameters["model"]["w1"] = 1
+    parameters["model"]["ell"] = 0.05
+    parameters["model"]["ell_e"] = 0.5
+    parameters["loading"]["min"] = 0.7
+    parameters["loading"]["max"] = 3.5
     parameters["loading"]["steps"] = 10
 
     parameters["solvers"]["damage"]["snes"]["snes_monitor"] = None
@@ -445,23 +394,32 @@ def load_parameters(file_path, model="at1"):
     parameters["solvers"]["damage_elasticity"]["alpha_rtol"] = 1e-4
 
     signature = hashlib.md5(str(parameters).encode("utf-8")).hexdigest()
+
     return parameters, signature
 
 
 if __name__ == "__main__":
     # Set the logging level
     logging.basicConfig(level=logging.INFO)
+
     # Load parameters
     parameters, signature = load_parameters(
         os.path.join(os.path.dirname(__file__), "parameters.yaml"),
+        ndofs=100,
+        model="at1",
     )
-    _storage = f"output/with_holes/MPI-{MPI.COMM_WORLD.Get_size()}/test"
+
+    # Run computation
+    # _storage = f"output/MPI-{MPI.COMM_WORLD.Get_size()}/{signature[0:6]}"
+    _storage = f"output/variable-thickness/MPI-{MPI.COMM_WORLD.Get_size()}/"
     visualization = Visualization(_storage)
 
     with dolfinx.common.Timer(f"~Computation Experiment") as timer:
         history_data = run_computation(parameters, _storage)
 
     experimental_data = pd.DataFrame(history_data)
+    print(experimental_data)
+
     from irrevolutions.utils import table_timing_data
 
     tasks = [
